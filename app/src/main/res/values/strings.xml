@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">智能天气墨水屏</string>
+    <string name="settings_title">墨水看板设置</string>
+    <string name="app_version">1.0.5</string>
+</resources>

@@ -1,0 +1,16 @@
+.gradle/
+.gradle-dist/
+.gradle-bootstrap/
+build/
+app/build/
+local.properties
+.idea/
+*.iml
+*.jks
+*.keystore
+
+# Local assistant settings and session diagnostics
+.claude/
+tools/diagnose_auto_approval.py
+tools/inspect_auto_mode.py
+tools/inspect_auto_routing.py
