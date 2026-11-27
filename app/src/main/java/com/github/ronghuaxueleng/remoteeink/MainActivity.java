@@ -120,12 +120,12 @@ public final class MainActivity extends Activity {
         return saved == null || saved.trim().isEmpty() ? DEFAULT_BASE_URL : saved.trim();
     }
     private boolean demoMode() { return prefs.getBoolean("demo_mode", false); }
-    private String cacheId() { return baseUrl() + "|" + city(); }
+    private String cacheId() { return "china-weather-msn/1|" + baseUrl() + "|" + city(); }
     private long intervalMillis() {
         return Math.max(60, Math.min(MAX_INTERVAL, prefs.getInt("interval_seconds", DEFAULT_INTERVAL))) * 1000L;
     }
     private void loadDashboard() {
-        view.setLocationLabel("beijing_tongzhou_langqingyuan".equals(city())
+        view.setLocationLabel(("beijing_tongzhou_langqingyuan".equals(city()) || "xinwen".equals(city()))
                 ? DashboardFetcher.CITY_TO_SERVER_CITY.get(city()) : null);
         if (!demoMode()) {
             String cached = cache.load(cacheId());
@@ -139,7 +139,7 @@ public final class MainActivity extends Activity {
     private void showDemo() {
         view.setData(DashboardJson.parse(DemoData.create(DashboardFetcher.serverCityName(city()))));
         view.setDemo(true);
-        view.setStatus("长按配置实时服务器");
+        view.setStatus("离线演示；关闭演示后自动获取实时天气");
     }
     private void scheduleMinuteTick() { handler.postDelayed(minuteTick, 60000 - System.currentTimeMillis() % 60000); }
     private void stopRefresh() {
@@ -157,7 +157,10 @@ public final class MainActivity extends Activity {
             request = null;
             if (result != null && result.ok()) {
                 view.setData(result.data != null ? result.data : DashboardJson.parse(result.json));
-                view.setDemo(false); view.setStatus("天气已更新"); view.requestFullRefresh();
+                view.setDemo(false);
+                view.setStatus("天气：中国天气网 · 空气：" + view.getData().airSource
+                        + " · 已更新" + (result.notice == null ? "" : "；" + result.notice));
+                view.requestFullRefresh();
                 disk.execute(() -> {
                     boolean saved = cache.save(identity, result.json);
                     if (!saved) handler.post(() -> {
@@ -186,23 +189,23 @@ public final class MainActivity extends Activity {
     private void showSettings() {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(20), dp(12), dp(20), dp(12));
-        TextView urlLabel = new TextView(this); urlLabel.setText("JSON 服务器基础地址（不含 /v1/dashboard）"); content.addView(urlLabel);
+        TextView urlLabel = new TextView(this); urlLabel.setText("天气直连中国天气网，空气与体感由 MSN 提供；下方地址仅用于黄历（不含 /v1/dashboard）"); content.addView(urlLabel);
         EditText url = new EditText(this); url.setSingleLine(true); url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         url.setText(baseUrl()); content.addView(url);
         TextView intervalLabel = new TextView(this); intervalLabel.setText("刷新间隔，单位秒（60–604800，默认 1800）"); content.addView(intervalLabel);
         EditText interval = new EditText(this); interval.setSingleLine(true); interval.setInputType(InputType.TYPE_CLASS_NUMBER);
         interval.setText(String.valueOf(prefs.getInt("interval_seconds", DEFAULT_INTERVAL))); content.addView(interval);
-        addButton(content, "测试服务器与 JSON 协议", () -> testServer(url.getText().toString().trim()));
+        addButton(content, "测试天气与黄历连接", () -> testServer(url.getText().toString().trim()));
         addButton(content, "选择城市", this::showCities);
         addButton(content, "立即刷新已保存的配置", () -> {
             prefs.edit().putBoolean("demo_mode", false).apply(); refresh();
         });
         addButton(content, "离线演示（明确标注为示例数据）", () -> {
             prefs.edit().putBoolean("demo_mode", true).apply(); stopRefresh(); showDemo();
-            view.requestFullRefresh(); Toast.makeText(this, "已切换离线演示，保存服务器配置可恢复联网", Toast.LENGTH_LONG).show();
+            view.requestFullRefresh(); Toast.makeText(this, "已切换离线演示，点击立即刷新可恢复联网", Toast.LENGTH_LONG).show();
         });
         TextView version = new TextView(this);
-        version.setText("智能天气墨水屏 " + BuildConfig.VERSION_NAME + "\n长按画面打开设置，点击左上角切换城市。\n支持 HTTP/HTTPS 服务，建议填写可用的 HTTPS 地址。");
+        version.setText("智能天气墨水屏 " + BuildConfig.VERSION_NAME + "\n长按画面打开设置，点击左上角切换城市。\n天气直连中国天气网；MSN 提供空气质量与体感温度，空气来源显示在底部。空气卡片显示 AQI 和首要污染物，保留原始单位。黄历使用上方接口。未提供的指标显示 --。");
         version.setPadding(0, dp(12), 0, 0); content.addView(version);
         ScrollView scroll = new ScrollView(this); scroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("墨水看板设置").setView(scroll)
@@ -222,11 +225,13 @@ public final class MainActivity extends Activity {
     private void testServer(String address) {
         if (!DashboardFetcher.validBaseUrl(address)) { Toast.makeText(this, "服务器地址无效", Toast.LENGTH_LONG).show(); return; }
         if (testRequests.size() >= 2) { Toast.makeText(this, "正在测试，请稍候", Toast.LENGTH_SHORT).show(); return; }
-        Toast.makeText(this, "正在测试服务器与 JSON 协议", Toast.LENGTH_SHORT).show();
+        Toast.makeText(this, "正在测试天气与黄历连接", Toast.LENGTH_SHORT).show();
         final DashboardFetcher[] task = new DashboardFetcher[1];
         task[0] = new DashboardFetcher(this, address, city(), result -> {
             testRequests.remove(task[0]);
-            if (active && !isFinishing()) Toast.makeText(this, result.ok() ? "服务器与 JSON 协议正常" : result.error, Toast.LENGTH_LONG).show();
+            if (active && !isFinishing()) Toast.makeText(this, result.ok()
+                    ? (result.notice == null ? "天气、MSN 与黄历连接正常" : "天气实况正常；" + result.notice)
+                    : result.error, Toast.LENGTH_LONG).show();
         });
         testRequests.add(task[0]); task[0].executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }

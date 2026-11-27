@@ -19,6 +19,7 @@ public final class DashboardCanvasView extends View {
     private static final String[] SEGMENTS = {"abcdef", "bc", "abged", "abgcd", "fgbc", "afgcd", "afgecd", "abc", "abcdefg", "abfgcd"};
     private final Paint paint = new Paint(Paint.ANTI_ALIAS_FLAG);
     private final RectF oval = new RectF();
+    private final SeasonalCalendar seasonalCalendar = new SeasonalCalendar();
     private DashboardJson.DashboardData data;
     private boolean weatherStale, airStale, demo, longPressConsumed;
     private int fullRefreshPhase;
@@ -90,6 +91,9 @@ public final class DashboardCanvasView extends View {
                 fill(); c.drawRect(x + 5, 206, x + 20, 225, paint); c.drawRect(x + 5, 277, x + 20, 296, paint); x += 36;
             } else { digit(c, ch, x, 162, 106, 202); x += 118; }
         }
+        DashboardJson.Almanac almanac = data == null ? null : data.almanac;
+        fittedLeft(c, almanac == null ? "--" : almanac.lunar, 34, 410, 29, 500);
+        fittedLeft(c, almanac == null ? "--" : almanac.ganzhi, 34, 452, 26, 500);
         DashboardJson.Current current = data == null ? null : data.current;
         weatherIcon(c, 690, 227, 106, current == null ? null : current.code);
         fitted(c, DashboardLayout.weatherLabelText(current), 875, 229, 37, 220);
@@ -113,7 +117,7 @@ public final class DashboardCanvasView extends View {
         if (parts.indexOf('c') >= 0) c.drawRect(x + w - t, y + half + t / 2, x + w, y + h - t, paint);
     }
     private void metrics(Canvas c) {
-        String[] labels = {"风向 / 风速", "湿度", "PM2.5", "体感温度"};
+        String[] labels = {"风向 / 风速", "湿度", "空气质量", "体感温度"};
         DashboardJson.Current current = data == null ? null : data.current;
         DashboardJson.Air air = data == null ? null : data.air;
         for (int i = 0; i < 4; i++) {
@@ -126,8 +130,9 @@ public final class DashboardCanvasView extends View {
             } else if (i == 1) {
                 fitted(c, DashboardLayout.humidityText(current), center, 646, 51, 230);
             } else if (i == 2) {
-                fitted(c, DashboardLayout.pmText(air), center, 613, 32, 230);
-                fitted(c, airStale && !demo ? "空气数据已过期" : DashboardLayout.pmGradeText(air), center, 669, 23, 230);
+                fitted(c, "AQI " + DashboardLayout.phpNumber(air == null ? null : air.aqi), center, 605, 36, 230);
+                fitted(c, air == null ? "--" : air.primaryPollutant, center, 646, 24, 230);
+                fitted(c, air == null ? "--" : air.aqiLabel, center, 686, 23, 230);
             } else {
                 fitted(c, DashboardLayout.feelsLikeText(current), center, 646, 48, 230);
             }
@@ -151,15 +156,16 @@ public final class DashboardCanvasView extends View {
     }
     private void almanac(Canvas c) {
         DashboardJson.Almanac a = data == null ? null : data.almanac;
-        text(c, "今日黄历", 30, 1081, 32, true, Paint.Align.LEFT);
-        text(c, a == null ? "--" : a.lunar, 205, 1081, 29, true, Paint.Align.LEFT);
-        text(c, a == null ? "--" : a.ganzhi, 1040, 1081, 26, false, Paint.Align.RIGHT);
-        fitted(c, DashboardLayout.termFestivalText(a), 535, 1122, 25, 990);
+        SeasonalCalendar.Snapshot season = seasonalCalendar.at(System.currentTimeMillis());
+        line(c, 535, 1050, 535, 1125);
+        fittedLeft(c, season.termLine, 30, 1074, 25, 480);
+        fittedLeft(c, DashboardLayout.termPoemText(season.termName, season.rotationDay), 30, 1117, 22, 480);
+        fittedLeft(c, "节日：" + (a == null ? "--" : a.festival), 565, 1074, 27, 475);
+        fittedLeft(c, season.festivalCountdown, 565, 1117, 23, 475);
         line(c, 30, 1141, 1040, 1141);
-        text(c, "吉时", 30, 1180, 26, true, Paint.Align.LEFT);
-        hourLine(c, a == null ? null : a.goodTimes, a == null ? null : a.goodHours, 120, 1180);
-        text(c, "凶时", 30, 1220, 26, true, Paint.Align.LEFT);
-        hourLine(c, a == null ? null : a.badTimes, a == null ? null : a.badHours, 120, 1220);
+        DashboardJson.Quote quote = data == null ? null : data.quote;
+        fitted(c, quote == null ? "--" : quote.content, 535, 1182, 28, 1010);
+        fittedLeft(c, quote == null ? "一言" : quote.attribution(), 30, 1220, 22, 1010);
         line(c, 30, 1240, 1040, 1240); line(c, 535, 1258, 535, 1390);
         text(c, "宜", 65, 1311, 51, true, Paint.Align.CENTER);
         text(c, "忌", 575, 1311, 51, true, Paint.Align.CENTER);
@@ -171,22 +177,6 @@ public final class DashboardCanvasView extends View {
         for (int i = 0; i < layout.yiLines.size(); i++) fittedLeft(c, layout.yiLines.get(i), 115, layout.firstBaseline + i * layout.lineStep, layout.size, 385);
         for (int i = 0; i < layout.jiLines.size(); i++) fittedLeft(c, layout.jiLines.get(i), 620, layout.firstBaseline + i * layout.lineStep, layout.size, 400);
         line(c, 30, 1400, 1040, 1400);
-    }
-    private void hourLine(Canvas c, List<String> values, List<DashboardJson.AlmanacHour> hours, float x, float baseline) {
-        StringBuilder content = new StringBuilder();
-        if (values != null && !values.isEmpty()) {
-            for (int i = 0; i < Math.min(values.size(), 8); i++) {
-                if (content.length() > 0) content.append("  "); content.append(values.get(i));
-            }
-            if (values.size() > 8) content.append(" …");
-        } else if (hours != null && !hours.isEmpty()) {
-            for (int i = 0; i < Math.min(hours.size(), 8); i++) {
-                DashboardJson.AlmanacHour h = hours.get(i);
-                if (content.length() > 0) content.append("  "); content.append(h.name);
-                if (h.startHour != null && h.endHour != null) content.append(' ').append(h.startHour).append('-').append(h.endHour);
-            }
-        }
-        fittedLeft(c, content.length() == 0 ? "--" : content.toString(), x, baseline, 24, 920);
     }
     private void weatherIcon(Canvas c, float x, float y, float size, Integer code) {
         if (code == null) { text(c, "--", x, y + 10, 30, false, Paint.Align.CENTER); return; }
@@ -214,7 +204,7 @@ public final class DashboardCanvasView extends View {
             cloud.cubicTo(50, -29, 64, 7, 43, 24); cloud.close(); c.drawPath(cloud, paint);
             if (code >= 51 && code <= 67 || code >= 80 && code <= 82) {
                 for (int i = -1; i <= 1; i++) c.drawLine(i * 22 + 4, 35, i * 22 - 5, 51, paint);
-            } else if (code >= 71 && code <= 77 || code == 85 || code == 86) {
+            } else if (code == 68 || code == 69 || code >= 71 && code <= 77 || code == 85 || code == 86) {
                 for (int i = -1; i <= 1; i++) { c.drawLine(i * 24 - 6, 44, i * 24 + 6, 44, paint); c.drawLine(i * 24, 38, i * 24, 50, paint); }
             } else if (code >= 95) {
                 Path bolt = new Path(); bolt.moveTo(4, 30); bolt.lineTo(-12, 48); bolt.lineTo(1, 48); bolt.lineTo(-5, 63);

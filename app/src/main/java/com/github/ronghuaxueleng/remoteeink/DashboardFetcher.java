@@ -1,6 +1,7 @@
 package com.github.ronghuaxueleng.remoteeink;
 
 import android.content.Context;
+import android.content.SharedPreferences;
 import android.net.SSLCertificateSocketFactory;
 import android.os.AsyncTask;
 import android.os.Build;
@@ -22,6 +23,7 @@ import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import org.json.JSONObject;
 import javax.net.ssl.HttpsURLConnection;
 import javax.net.ssl.SSLContext;
 import javax.net.ssl.SSLSocket;
@@ -33,26 +35,35 @@ import javax.net.ssl.X509TrustManager;
 @SuppressWarnings("deprecation")
 public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetcher.Result> {
     private static final int MAX_BODY_BYTES = 1024 * 1024;
+    private static final String QUOTE_ENDPOINT = "https://v1.hitokoto.cn/?c=d&c=i&c=k&min_length=8&max_length=36";
     public static final Map<String, String> CITY_TO_SERVER_CITY;
+    private static final Map<String, String> WEATHER_STATIONS;
     static {
         Map<String, String> cities = new LinkedHashMap<>();
         String[] ids = {"beijing", "shanghai", "guangzhou", "shenzhen", "hangzhou", "chengdu",
                 "wuhan", "taian", "yantai", "weihai", "xinjiapo", "xinwen"};
         String[] names = {"北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "泰安", "烟台", "威海", "新加坡", "新汶"};
         for (int i = 0; i < ids.length; i++) cities.put(ids[i], names[i]);
-        cities.put("beijing_tongzhou_langqingyuan", "北京市通州区朗清园（北京参考）");
+        cities.put("xinwen", "新汶（新泰市预报）");
+        cities.put("beijing_tongzhou_langqingyuan", "北京市通州区朗清园（通州区预报）");
         CITY_TO_SERVER_CITY = Collections.unmodifiableMap(cities);
+        String[] stations = {"101010100", "101020100", "101280101", "101280601", "101210101", "101270101",
+                "101200101", "101120801", "101120501", "101121301", "104010100", "101120802"};
+        Map<String, String> weather = new LinkedHashMap<>();
+        for (int i = 0; i < ids.length; i++) weather.put(ids[i], stations[i]);
+        weather.put("beijing_tongzhou_langqingyuan", "101010600");
+        WEATHER_STATIONS = Collections.unmodifiableMap(weather);
     }
     public interface Listener { void onDashboardResult(Result result); }
     public static final class Result {
-        public final String json, error;
+        public final String json, error, notice;
         public final int statusCode;
         public final DashboardJson.DashboardData data;
         public Result(String json, String error, int statusCode) {
-            this(json, error, statusCode, null);
+            this(json, error, statusCode, null, null);
         }
-        private Result(String json, String error, int statusCode, DashboardJson.DashboardData data) {
-            this.json = json; this.error = error; this.statusCode = statusCode; this.data = data;
+        private Result(String json, String error, int statusCode, DashboardJson.DashboardData data, String notice) {
+            this.json = json; this.error = error; this.statusCode = statusCode; this.data = data; this.notice = notice;
         }
         public boolean ok() { return json != null && error == null; }
     }
@@ -60,6 +71,7 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
     private final Context context;
     private final Listener listener;
     private volatile HttpURLConnection activeConnection;
+    private SSLSocketFactory socketFactory;
 
     public DashboardFetcher(Context context, String baseUrl, String cityId, Listener listener) {
         this.context = context.getApplicationContext();
@@ -68,10 +80,15 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
         this.listener = listener;
     }
     public static String serverCityName(String cityId) {
-        // The service supports Beijing city data, not a verified neighborhood forecast.
+        // Only almanac is taken from this service; its weather is never merged.
         if ("beijing_tongzhou_langqingyuan".equals(cityId)) return "北京";
+        if ("xinwen".equals(cityId)) return "新汶";
         String name = CITY_TO_SERVER_CITY.get(cityId);
         return name == null ? "北京" : name;
+    }
+    public static String weatherStationId(String cityId) {
+        String station = WEATHER_STATIONS.get(cityId);
+        return station == null ? WEATHER_STATIONS.get("beijing") : station;
     }
     public static boolean validBaseUrl(String text) {
         if (text == null || text.trim().isEmpty()) return false;
@@ -91,43 +108,107 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
         } catch (Exception e) { return null; }
     }
     @Override protected Result doInBackground(Void... ignored) {
-        String endpoint = buildEndpoint();
-        if (endpoint == null) return new Result(null, "服务器地址无效", 0);
+        try {
+            String station = weatherStationId(cityId);
+            boolean domestic = station.startsWith("101");
+            String suffix = domestic ? ".html" : ".htm";
+            // The CMA endpoint requires TLS cipher suites unavailable on API 17-19.
+            // Its public HTTP endpoint serves the same weather payload on these devices.
+            String weatherBase = (Build.VERSION.SDK_INT < 20 ? "http" : "https") + "://d1.weather.com.cn/";
+            String currentUrl = weatherBase + (domestic ? "sk_2d/" : "obs_forg/") + station + suffix;
+            JSONObject root = ChinaWeatherJson.current(fetch(currentUrl, true, 15000), station,
+                    serverCityName(cityId), System.currentTimeMillis());
+            String notice = null;
+            try {
+                ChinaWeatherJson.forecast(root, fetch(weatherBase + "wap_40d/" + station + suffix,
+                        true, 15000), System.currentTimeMillis());
+                if (root.has("weather_error")) notice = "部分日期预报缺失";
+            } catch (Exception e) {
+                if (isCancelled()) throw e;
+                root.put("weather_error", "预报获取失败：" + e.getMessage());
+                notice = "预报获取失败";
+            }
+            try {
+                MsnWeatherJson.merge(root, fetch(MsnWeatherJson.endpoint(cityId), false, 15000), cityId);
+            } catch (Exception e) {
+                if (isCancelled()) throw e;
+                root.put("air_error", "MSN 获取失败：" + e.getClass().getSimpleName() + " " + e.getMessage());
+                notice = notice == null ? "MSN 空气与体感获取失败" : notice + "，MSN 空气与体感获取失败";
+            }
+            try {
+                String endpoint = buildEndpoint();
+                if (endpoint == null) throw new IOException("黄历服务地址无效");
+                String body = fetch(endpoint, false, 8000);
+                DashboardJson.parse(body);
+                JSONObject server = new JSONObject(body);
+                if (!root.getString("date").equals(server.optString("date"))
+                        || server.optJSONObject("almanac") == null) throw new IOException("缺少当日黄历");
+                root.put("almanac", server.getJSONObject("almanac"));
+            } catch (Exception e) {
+                if (isCancelled()) throw e;
+                root.put("almanac_error", e.getMessage());
+                notice = notice == null ? "黄历获取失败" : notice + "，黄历获取失败";
+            }
+            SharedPreferences quotes = context.getSharedPreferences("hitokoto", Context.MODE_PRIVATE);
+            String quoteBody = quotes.getString("last_quote", null);
+            try {
+                String body = fetch(QUOTE_ENDPOINT, false, 8000);
+                JSONObject quote = new JSONObject(body);
+                if (!(quote.opt("hitokoto") instanceof String)
+                        || quote.getString("hitokoto").trim().isEmpty()) throw new IOException("句子正文为空");
+                quoteBody = body;
+                quotes.edit().putString("last_quote", body).apply();
+            } catch (Exception e) {
+                if (isCancelled()) throw e;
+                root.put("quote_error", e.getClass().getSimpleName() + " " + e.getMessage());
+                String message = quoteBody == null ? "句子获取失败" : "句子获取失败，保留上次内容";
+                notice = notice == null ? message : notice + "，" + message;
+            }
+            if (quoteBody != null) root.put("quote", new JSONObject(quoteBody));
+            if (isCancelled()) return new Result(null, "已取消", 0);
+            String json = root.toString();
+            return new Result(json, null, 200, DashboardJson.parse(json), notice);
+        } catch (SocketTimeoutException e) {
+            return new Result(null, "天气请求超时", 0);
+        } catch (Exception e) {
+            return new Result(null, "天气获取失败：" + e.getClass().getSimpleName() + " " + e.getMessage(), 0);
+        }
+    }
+    private String fetch(String endpoint, boolean weather, int timeout) throws Exception {
         HttpURLConnection connection = null;
         try {
             connection = (HttpURLConnection) new URL(endpoint).openConnection();
             activeConnection = connection;
-            if (isCancelled()) return new Result(null, "已取消", 0);
+            if (isCancelled()) throw new IOException("已取消");
             if (Build.VERSION.SDK_INT < 20 && connection instanceof HttpsURLConnection) {
-                ((HttpsURLConnection) connection).setSSLSocketFactory(tls12SocketFactory());
+                if (socketFactory == null) socketFactory = tls12SocketFactory();
+                ((HttpsURLConnection) connection).setSSLSocketFactory(socketFactory);
             }
-            connection.setConnectTimeout(15000);
-            connection.setReadTimeout(60000);
+            connection.setConnectTimeout(timeout);
+            connection.setReadTimeout(timeout);
             connection.setUseCaches(false);
-            connection.setRequestProperty("Accept", "application/json");
+            connection.setRequestProperty("Accept", "application/json, text/javascript, */*");
             connection.setRequestProperty("Cache-Control", "no-cache");
+            connection.setRequestProperty("User-Agent", "Mozilla/5.0 (Android) KindleWeatherInk");
+            if (weather) {
+                connection.setRequestProperty("Referer", "https://www.weather.com.cn/");
+            } else if ("assets.msn.cn".equals(connection.getURL().getHost())) {
+                connection.setRequestProperty("Referer", "https://www.msn.cn/");
+            }
             int code = connection.getResponseCode();
-            if (code != HttpURLConnection.HTTP_OK) return new Result(null, errorText(code), code);
-            if (connection.getContentLength() > MAX_BODY_BYTES) return new Result(null, "服务器响应过大", code);
+            if (code != HttpURLConnection.HTTP_OK) throw new IOException(errorText(code));
+            if (connection.getContentLength() > MAX_BODY_BYTES) throw new IOException("服务器响应过大");
             try (InputStream input = connection.getInputStream();
                  ByteArrayOutputStream bytes = new ByteArrayOutputStream()) {
                 byte[] buffer = new byte[8192];
                 int count;
                 while ((count = input.read(buffer)) != -1) {
-                    if (isCancelled()) return new Result(null, "已取消", 0);
-                    if (bytes.size() + count > MAX_BODY_BYTES) return new Result(null, "服务器响应过大", code);
+                    if (isCancelled()) throw new IOException("已取消");
+                    if (bytes.size() + count > MAX_BODY_BYTES) throw new IOException("服务器响应过大");
                     bytes.write(buffer, 0, count);
                 }
-                String json = new String(bytes.toByteArray(), "UTF-8");
-                DashboardJson.DashboardData data = DashboardJson.parse(json);
-                return new Result(json, null, code, data);
+                return new String(bytes.toByteArray(), "UTF-8");
             }
-        } catch (SocketTimeoutException e) {
-            return new Result(null, "连接或读取超时", 0);
-        } catch (IllegalArgumentException e) {
-            return new Result(null, "JSON 格式错误：" + e.getMessage(), 0);
-        } catch (Exception e) {
-            return new Result(null, "无法连接服务器（" + e.getClass().getSimpleName() + "）", 0);
         } finally {
             activeConnection = null;
             if (connection != null) connection.disconnect();
@@ -152,6 +233,10 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
         // Official CA: https://letsencrypt.org/certs/isrg-root-x2.pem (expires 2040-09-17).
         try (InputStream input = context.getResources().openRawResource(R.raw.isrg_root_x2)) {
             roots.setCertificateEntry("isrg-root-x2", CertificateFactory.getInstance("X.509").generateCertificate(input));
+        }
+        // Official CA: https://cacerts.digicert.com/DigiCertGlobalRootG2.crt (expires 2038-01-15).
+        try (InputStream input = context.getResources().openRawResource(R.raw.digicert_global_root_g2)) {
+            roots.setCertificateEntry("digicert-global-root-g2", CertificateFactory.getInstance("X.509").generateCertificate(input));
         }
         TrustManagerFactory extraFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
         extraFactory.init(roots);

@@ -51,12 +51,13 @@ public final class DashboardJsonTest {
         assertNotNull(data.current.temperature);
     }
 
-    @Test public void langqingyuanIsSelectableAndExplicitlyUsesBeijingReferenceData() {
+    @Test public void langqingyuanUsesTongzhouWeatherAndBeijingAlmanac() {
         String cityId = "beijing_tongzhou_langqingyuan";
         String label = DashboardFetcher.CITY_TO_SERVER_CITY.get(cityId);
         assertNotNull(label);
         assertTrue(label.contains("北京市通州区朗清园"));
-        assertTrue(label.contains("北京参考"));
+        assertTrue(label.contains("通州区预报"));
+        assertEquals("101010600", DashboardFetcher.weatherStationId(cityId));
         assertEquals("北京", DashboardFetcher.serverCityName(cityId));
         assertEquals("上海", DashboardFetcher.serverCityName("shanghai"));
         assertEquals("北京", DashboardFetcher.serverCityName("unknown"));

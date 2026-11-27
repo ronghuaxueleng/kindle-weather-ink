@@ -39,7 +39,7 @@ for setting, expected in (('namespace', 'com.github.ronghuaxueleng.remoteeink'),
     if not re.search(r"\b" + setting + r"\s+'" + re.escape(expected) + r"'", build):
         errors.append('Unexpected ' + setting + ': expected ' + expected)
 for pattern in (r'compileSdk\s+33\b', r'minSdk\s+17\b', r'targetSdk\s+28\b',
-                r'versionCode\s+15\b', r"versionName\s+'1\.0\.5'"):
+                r'versionCode\s+17\b', r"versionName\s+'1\.0\.7'"):
     if not re.search(pattern, build):
         errors.append('Unexpected version setting: ' + pattern)
 if len(java_files) != 7:

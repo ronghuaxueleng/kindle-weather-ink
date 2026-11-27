@@ -139,6 +139,7 @@ public final class DashboardJson {
         public final Air air;
         public final List<ForecastDay> forecast;
         public final Almanac almanac;
+        public final Quote quote;
 
         private DashboardData(JSONObject o, long now) {
             schema = SCHEMA_ID;
@@ -158,10 +159,26 @@ public final class DashboardJson {
             air = new Air(o.optJSONObject("air"));
             forecast = DashboardJson.forecast(o, now);
             almanac = new Almanac(o.optJSONObject("almanac"));
+            quote = new Quote(o.optJSONObject("quote"));
         }
         public boolean isWeatherStale() { return Boolean.TRUE.equals(weatherStale); }
         public boolean isAirStale() { return Boolean.TRUE.equals(airStale); }
         public String firstForecastDate() { return forecast.isEmpty() ? null : forecast.get(0).date; }
+    }
+
+    public static final class Quote {
+        public final String content, author, source;
+
+        Quote(JSONObject o) {
+            content = text(o, "hitokoto", MISSING_TEXT).replaceAll("\\s+", " ").trim();
+            author = text(o, "from_who", "").trim();
+            source = text(o, "from", "").trim();
+        }
+        public String attribution() {
+            String credit = author;
+            if (!source.isEmpty()) credit += "《" + source + "》";
+            return (credit.isEmpty() ? "" : "——" + credit + " · ") + "一言";
+        }
     }
 
     public static final class Current {
@@ -169,6 +186,7 @@ public final class DashboardJson {
         public final Double windDirection, uvIndex;
         public final Integer windLevel, code;
         public final String windDirectionLabel, label, observationTime, sunrise, sunset;
+        public final String feelsLikeSource, feelsLikeObservationTime;
         private Current(JSONObject o) {
             temperature = number(o, "temperature"); feelsLike = number(o, "feels_like");
             high = number(o, "high"); low = number(o, "low"); humidity = number(o, "humidity");
@@ -178,15 +196,20 @@ public final class DashboardJson {
             windDirectionLabel = text(o, "wind_direction_label", MISSING_TEXT);
             label = text(o, "label", MISSING_TEXT);
             observationTime = text(o, "observation_time", null);
+            feelsLikeSource = text(o, "feels_like_source", null);
+            feelsLikeObservationTime = text(o, "feels_like_observation_time", null);
             sunrise = text(o, "sunrise", null); sunset = text(o, "sunset", null);
         }
     }
     public static final class Air {
         public final Double pm25, aqi;
         public final String aqiSystem, pm25Grade, observationTime;
+        public final String aqiLabel, primaryPollutant;
         private Air(JSONObject o) {
             pm25 = number(o, "pm2_5"); aqi = number(o, "aqi");
             aqiSystem = text(o, "aqi_system", MISSING_TEXT);
+            aqiLabel = text(o, "aqi_label", MISSING_TEXT);
+            primaryPollutant = text(o, "primary_pollutant", MISSING_TEXT);
             pm25Grade = text(o, "pm2_5_grade", MISSING_TEXT);
             observationTime = text(o, "observation_time", null);
         }

@@ -42,6 +42,7 @@ final class DemoData {
             root.put("current", current);
             JSONObject air = new JSONObject();
             air.put("pm2_5", 21); air.put("aqi", 35); air.put("aqi_system", "CN");
+            air.put("aqi_label", "优（演示）"); air.put("primary_pollutant", "PM2.5 21 μg/m³");
             air.put("pm2_5_grade", "优"); air.put("observation_time", timestamp);
             root.put("air", air);
             JSONArray forecast = new JSONArray();

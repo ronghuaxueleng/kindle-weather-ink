@@ -109,7 +109,62 @@ public final class DashboardLayout {
     public static String windSpeedLineText(DashboardJson.Current c) { return windSpeedText(c == null ? null : c.windMs); }
     public static String pmText(DashboardJson.Air air) { return phpNumber(air == null ? null : air.pm25) + " μg/m³"; }
     public static String pmGradeText(DashboardJson.Air air) { return air == null || "--".equals(air.pm25Grade) ? "--" : air.pm25Grade + "（参考）"; }
-    public static String termFestivalText(DashboardJson.Almanac a) { return a == null ? "节气：--  节日：--" : "节气：" + a.term + "  节日：" + a.festival; }
+    // Excerpts checked against Wikisource; match the term or its seasonal imagery.
+    private static final String[][] TERM_POEMS = {
+        {"立春", "春日春盘细生菜，忽忆两京梅发时。", "杜甫"}, // 《立春》
+        {"雨水", "好雨知时节，当春乃发生。", "杜甫"}, // 《春夜喜雨》
+        {"惊蛰", "微雨众卉新，一雷惊蛰始。", "韦应物"}, // 《观田家》
+        {"春分", "仲春初四日，春色正中分。", "徐铉"}, // 《春分日》
+        {"清明", "清明时节雨纷纷，路上行人欲断魂。", "杜牧"}, // 《清明》
+        {"谷雨", "竹外桃花三两枝，春江水暖鸭先知。", "苏轼"}, // 《惠崇春江晚景》
+        {"立夏", "分分红紫已成尘，布谷声中夏令新。", "陆游"}, // 《初夏绝句》
+        {"小满", "绿遍山原白满川，子规声里雨如烟。", "翁卷"}, // 《乡村四月》
+        {"芒种", "田家少闲月，五月人倍忙。", "白居易"}, // 《观刈麦》
+        {"夏至", "昼晷已云极，宵漏自此长。", "韦应物"}, // 《夏至避暑北池》
+        {"小暑", "接天莲叶无穷碧，映日荷花别样红。", "杨万里"}, // 《晓出净慈寺送林子方》
+        {"大暑", "泉眼无声惜细流，树阴照水爱晴柔。", "杨万里"}, // 《小池》
+        {"立秋", "乳鸦啼散玉屏空，一枕新凉一扇风。", "刘翰"}, // 《立秋》
+        {"处暑", "离离暑云散，袅袅凉风起。", "白居易"}, // 《早秋曲江感怀》
+        {"白露", "露从今夜白，月是故乡明。", "杜甫"}, // 《月夜忆舍弟》
+        {"秋分", "自古逢秋悲寂寥，我言秋日胜春朝。", "刘禹锡"}, // 《秋词二首》
+        {"寒露", "空山新雨后，天气晚来秋。", "王维"}, // 《山居秋暝》
+        {"霜降", "停车坐爱枫林晚，霜叶红于二月花。", "杜牧"}, // 《山行》
+        {"立冬", "千山鸟飞绝，万径人踪灭。", "柳宗元"}, // 《江雪》
+        {"小雪", "花雪随风不厌看，更多还肯失林峦。", "戴叔伦"}, // 《小雪》
+        {"大雪", "忽如一夜春风来，千树万树梨花开。", "岑参"}, // 《白雪歌送武判官归京》
+        {"冬至", "天时人事日相催，冬至阳生春又来。", "杜甫"}, // 《小至》
+        {"小寒", "墙角数枝梅，凌寒独自开。", "王安石"}, // 《梅花》
+        {"大寒", "孤舟蓑笠翁，独钓寒江雪。", "柳宗元"} // 《江雪》
+    };
+    private static final String[][] SEASON_POEMS = {
+        {"迟日江山丽，春风花草香。——杜甫", // 《绝句》
+                "不知细叶谁裁出，二月春风似剪刀。——贺知章"}, // 《咏柳》
+        {"梅子金黄杏子肥，麦花雪白菜花稀。——范成大", // 《四时田园杂兴》
+                "日长睡起无情思，闲看儿童捉柳花。——杨万里"}, // 《闲居初夏午睡起二绝句》
+        {"树树皆秋色，山山唯落晖。——王绩", // 《野望》
+                "湖光秋月两相和，潭面无风镜未磨。——刘禹锡"}, // 《望洞庭》
+        {"晚来天欲雪，能饮一杯无？——白居易", // 《问刘十九》
+                "隔牖风惊竹，开门雪满山。——王维"} // 《冬晚对雪忆胡居士家》
+    };
+    private static final String[] SMALL_SNOW_POEMS = {
+        "征西府里日西斜，独试新炉自煮茶。——徐铉", // 《和萧郎中小雪日作》
+        "散漫阴风里，天涯不可收。——李咸用", // 《小雪》
+        "时候频过小雪天，江南寒色未曾偏。——陆龟蒙" // 《小雪后书事》
+    };
+    public static String termPoemText(String term, int day) {
+        for (int i = 0; i < TERM_POEMS.length; i++) {
+            String[] poem = TERM_POEMS[i];
+            if (!poem[0].equals(term)) continue;
+            String[] seasonal = SEASON_POEMS[i / 6];
+            boolean smallSnow = "小雪".equals(term);
+            int size = 1 + seasonal.length + (smallSnow ? SMALL_SNOW_POEMS.length : 0);
+            int index = Math.max(0, day) % size;
+            if (index == 0) return poem[1] + "——" + poem[2];
+            if (smallSnow && index <= SMALL_SNOW_POEMS.length) return SMALL_SNOW_POEMS[index - 1];
+            return seasonal[index - 1 - (smallSnow ? SMALL_SNOW_POEMS.length : 0)];
+        }
+        return "--";
+    }
     public static String monthDayText(String day) {
         if (!DashboardJson.isIsoDay(day)) return "--";
         return Integer.parseInt(day.substring(5, 7)) + "/" + Integer.parseInt(day.substring(8, 10));
