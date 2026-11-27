@@ -35,7 +35,7 @@ import java.util.concurrent.Executors;
 
 @SuppressWarnings("deprecation")
 public final class MainActivity extends Activity {
-    private static final String DEFAULT_BASE_URL = "http://kindle.pptxgen.com";
+    private static final String DEFAULT_BASE_URL = "https://kindle.pptxgen.com";
     private static final int DEFAULT_INTERVAL = 1800;
     private static final int MAX_INTERVAL = 604800;
     private final Handler handler = new Handler(Looper.getMainLooper());
@@ -125,6 +125,8 @@ public final class MainActivity extends Activity {
         return Math.max(60, Math.min(MAX_INTERVAL, prefs.getInt("interval_seconds", DEFAULT_INTERVAL))) * 1000L;
     }
     private void loadDashboard() {
+        view.setLocationLabel("beijing_tongzhou_langqingyuan".equals(city())
+                ? DashboardFetcher.CITY_TO_SERVER_CITY.get(city()) : null);
         if (!demoMode()) {
             String cached = cache.load(cacheId());
             if (cached != null) {

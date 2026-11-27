@@ -21,6 +21,7 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
                 "wuhan", "taian", "yantai", "weihai", "xinjiapo", "xinwen"};
         String[] names = {"北京", "上海", "广州", "深圳", "杭州", "成都", "武汉", "泰安", "烟台", "威海", "新加坡", "新汶"};
         for (int i = 0; i < ids.length; i++) cities.put(ids[i], names[i]);
+        cities.put("beijing_tongzhou_langqingyuan", "北京市通州区朗清园（北京参考）");
         CITY_TO_SERVER_CITY = Collections.unmodifiableMap(cities);
     }
     public interface Listener { void onDashboardResult(Result result); }
@@ -46,6 +47,8 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
         this.listener = listener;
     }
     public static String serverCityName(String cityId) {
+        // The service supports Beijing city data, not a verified neighborhood forecast.
+        if ("beijing_tongzhou_langqingyuan".equals(cityId)) return "北京";
         String name = CITY_TO_SERVER_CITY.get(cityId);
         return name == null ? "北京" : name;
     }

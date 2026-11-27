@@ -22,7 +22,7 @@ public final class DashboardCanvasView extends View {
     private DashboardJson.DashboardData data;
     private boolean weatherStale, airStale, demo, longPressConsumed;
     private int fullRefreshPhase;
-    private String network = "网络 --", status = "长按画面设置服务器";
+    private String network = "网络 --", status = "长按画面设置服务器", locationLabel;
     private int battery = -1;
     private ActionListener actions;
     public interface ActionListener { void onCityClick(); void onSettingsClick(); }
@@ -38,6 +38,7 @@ public final class DashboardCanvasView extends View {
     public DashboardJson.DashboardData getData() { return data; }
     public void setData(DashboardJson.DashboardData value) { data = value; setStaleFlags(); invalidate(); }
     public void setDemo(boolean value) { demo = value; invalidate(); }
+    public void setLocationLabel(String value) { locationLabel = value; invalidate(); }
     public void setStatus(String text) { status = text == null ? "" : text; invalidate(); }
     public void setDeviceStatus(String label, int percent) { network = label; battery = percent; invalidate(); }
     public boolean isWeatherStale() { return weatherStale; }
@@ -74,7 +75,8 @@ public final class DashboardCanvasView extends View {
         canvas.restore();
     }
     private void header(Canvas c) {
-        text(c, DashboardLayout.cityLineText(data), 30, 51, 28, true, Paint.Align.LEFT);
+        String cityLine = locationLabel == null ? DashboardLayout.cityLineText(data) : "● " + locationLabel + " ▼";
+        fittedLeft(c, cityLine, 30, 51, 28, 650);
         text(c, network + "  " + (battery < 0 ? "--" : battery + "%") + "   ⚙", 1040, 51, 25, true, Paint.Align.RIGHT);
         line(c, 30, 76, 1040, 76);
         text(c, DashboardLayout.dateText(System.currentTimeMillis(), WEEKDAYS), 30, 114, 30, true, Paint.Align.LEFT);
