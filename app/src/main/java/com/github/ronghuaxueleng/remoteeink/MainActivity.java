@@ -152,7 +152,7 @@ public final class MainActivity extends Activity {
         final int token = generation;
         final String selected = city(), identity = cacheId();
         view.setStatus("正在更新天气…");
-        request = new DashboardFetcher(baseUrl(), selected, result -> {
+        request = new DashboardFetcher(this, baseUrl(), selected, result -> {
             if (!active || token != generation || !selected.equals(city()) || isFinishing()) return;
             request = null;
             if (result != null && result.ok()) {
@@ -224,7 +224,7 @@ public final class MainActivity extends Activity {
         if (testRequests.size() >= 2) { Toast.makeText(this, "正在测试，请稍候", Toast.LENGTH_SHORT).show(); return; }
         Toast.makeText(this, "正在测试服务器与 JSON 协议", Toast.LENGTH_SHORT).show();
         final DashboardFetcher[] task = new DashboardFetcher[1];
-        task[0] = new DashboardFetcher(address, city(), result -> {
+        task[0] = new DashboardFetcher(this, address, city(), result -> {
             testRequests.remove(task[0]);
             if (active && !isFinishing()) Toast.makeText(this, result.ok() ? "服务器与 JSON 协议正常" : result.error, Toast.LENGTH_LONG).show();
         });

@@ -1,15 +1,34 @@
 package com.github.ronghuaxueleng.remoteeink;
 
+import android.content.Context;
+import android.net.SSLCertificateSocketFactory;
 import android.os.AsyncTask;
+import android.os.Build;
 import java.io.ByteArrayOutputStream;
+import java.io.IOException;
 import java.io.InputStream;
+import java.net.InetAddress;
 import java.net.HttpURLConnection;
+import java.net.Socket;
 import java.net.SocketTimeoutException;
 import java.net.URL;
 import java.net.URLEncoder;
+import java.security.GeneralSecurityException;
+import java.security.KeyStore;
+import java.security.cert.CertificateException;
+import java.security.cert.CertificateFactory;
+import java.security.cert.X509Certificate;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.LinkedHashMap;
 import java.util.Map;
+import javax.net.ssl.HttpsURLConnection;
+import javax.net.ssl.SSLContext;
+import javax.net.ssl.SSLSocket;
+import javax.net.ssl.SSLSocketFactory;
+import javax.net.ssl.TrustManager;
+import javax.net.ssl.TrustManagerFactory;
+import javax.net.ssl.X509TrustManager;
 
 @SuppressWarnings("deprecation")
 public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetcher.Result> {
@@ -38,10 +57,12 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
         public boolean ok() { return json != null && error == null; }
     }
     private final String baseUrl, cityId;
+    private final Context context;
     private final Listener listener;
     private volatile HttpURLConnection activeConnection;
 
-    public DashboardFetcher(String baseUrl, String cityId, Listener listener) {
+    public DashboardFetcher(Context context, String baseUrl, String cityId, Listener listener) {
+        this.context = context.getApplicationContext();
         this.baseUrl = baseUrl == null ? "" : baseUrl.trim();
         this.cityId = cityId;
         this.listener = listener;
@@ -77,6 +98,9 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
             connection = (HttpURLConnection) new URL(endpoint).openConnection();
             activeConnection = connection;
             if (isCancelled()) return new Result(null, "已取消", 0);
+            if (Build.VERSION.SDK_INT < 20 && connection instanceof HttpsURLConnection) {
+                ((HttpsURLConnection) connection).setSSLSocketFactory(tls12SocketFactory());
+            }
             connection.setConnectTimeout(15000);
             connection.setReadTimeout(60000);
             connection.setUseCaches(false);
@@ -119,6 +143,82 @@ public final class DashboardFetcher extends AsyncTask<Void, Void, DashboardFetch
         if (code == 404) return "接口不存在（HTTP 404）";
         return "服务器返回 HTTP " + code;
     }
+    private SSLSocketFactory tls12SocketFactory() throws GeneralSecurityException, IOException {
+        TrustManagerFactory systemFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        systemFactory.init((KeyStore) null);
+        X509TrustManager systemTrust = (X509TrustManager) systemFactory.getTrustManagers()[0];
+        KeyStore roots = KeyStore.getInstance(KeyStore.getDefaultType());
+        roots.load(null, null);
+        // Official CA: https://letsencrypt.org/certs/isrg-root-x2.pem (expires 2040-09-17).
+        try (InputStream input = context.getResources().openRawResource(R.raw.isrg_root_x2)) {
+            roots.setCertificateEntry("isrg-root-x2", CertificateFactory.getInstance("X.509").generateCertificate(input));
+        }
+        TrustManagerFactory extraFactory = TrustManagerFactory.getInstance(TrustManagerFactory.getDefaultAlgorithm());
+        extraFactory.init(roots);
+        X509TrustManager extraTrust = (X509TrustManager) extraFactory.getTrustManagers()[0];
+        X509TrustManager trust = new X509TrustManager() {
+            @Override public void checkServerTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+                try { systemTrust.checkServerTrusted(chain, authType); }
+                catch (CertificateException e) { extraTrust.checkServerTrusted(chain, authType); }
+            }
+            @Override public void checkClientTrusted(X509Certificate[] chain, String authType) throws CertificateException {
+                systemTrust.checkClientTrusted(chain, authType);
+            }
+            @Override public X509Certificate[] getAcceptedIssuers() {
+                X509Certificate[] system = systemTrust.getAcceptedIssuers();
+                X509Certificate[] extra = extraTrust.getAcceptedIssuers();
+                X509Certificate[] all = Arrays.copyOf(system, system.length + extra.length);
+                System.arraycopy(extra, 0, all, system.length, extra.length);
+                return all;
+            }
+        };
+        SSLContext tls = SSLContext.getInstance("TLS");
+        tls.init(null, new TrustManager[] {trust}, null);
+        return new Tls12SocketFactory(tls.getSocketFactory());
+    }
+
+    private static final class Tls12SocketFactory extends SSLSocketFactory {
+        private final SSLSocketFactory delegate;
+
+        Tls12SocketFactory(SSLSocketFactory delegate) {
+            this.delegate = delegate;
+        }
+
+        private Socket enableTls12(Socket socket) {
+            if (socket instanceof SSLSocket) {
+                SSLSocket ssl = (SSLSocket) socket;
+                // Old OpenSSL can advertise TLS 1.0 when TLS 1.2 is added with TLS 1.1 disabled.
+                ssl.setEnabledProtocols(new String[] {"TLSv1.2"});
+            }
+            return socket;
+        }
+
+        private Socket configure(Socket socket, String host) {
+            // API 17-19's platform TLS sockets expose SNI through this public Android API.
+            new SSLCertificateSocketFactory(15000).setHostname(socket, host);
+            return enableTls12(socket);
+        }
+
+        @Override public String[] getDefaultCipherSuites() { return delegate.getDefaultCipherSuites(); }
+        @Override public String[] getSupportedCipherSuites() { return delegate.getSupportedCipherSuites(); }
+        @Override public Socket createSocket() throws IOException { return enableTls12(delegate.createSocket()); }
+        @Override public Socket createSocket(Socket socket, String host, int port, boolean autoClose) throws IOException {
+            return configure(delegate.createSocket(socket, host, port, autoClose), host);
+        }
+        @Override public Socket createSocket(String host, int port) throws IOException {
+            return configure(delegate.createSocket(host, port), host);
+        }
+        @Override public Socket createSocket(String host, int port, InetAddress localAddress, int localPort) throws IOException {
+            return configure(delegate.createSocket(host, port, localAddress, localPort), host);
+        }
+        @Override public Socket createSocket(InetAddress host, int port) throws IOException {
+            return enableTls12(delegate.createSocket(host, port));
+        }
+        @Override public Socket createSocket(InetAddress host, int port, InetAddress localAddress, int localPort) throws IOException {
+            return enableTls12(delegate.createSocket(host, port, localAddress, localPort));
+        }
+    }
+
     @Override protected void onPostExecute(Result result) {
         if (!isCancelled() && listener != null) listener.onDashboardResult(result);
     }
