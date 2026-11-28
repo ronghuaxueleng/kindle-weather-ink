@@ -12,7 +12,9 @@ import android.util.AttributeSet;
 import android.view.MotionEvent;
 import android.view.View;
 import java.util.ArrayList;
+import java.util.Calendar;
 import java.util.List;
+import java.util.TimeZone;
 
 /** Switchable monochrome dashboard on a 1072 x 1448 logical canvas. */
 public final class DashboardCanvasView extends View {
@@ -32,11 +34,20 @@ public final class DashboardCanvasView extends View {
     private final SeasonalCalendar seasonalCalendar = new SeasonalCalendar();
     private DashboardJson.DashboardData data;
     private boolean weatherStale, airStale, demo, longPressConsumed, segmentedClock;
+    private float touchDownX, touchDownY;
+    private int page, monthOffset;
+    private int cachedCalendarYear = -1, cachedCalendarMonth = -1;
+    private SeasonalCalendar.DayInfo[] calendarMonthInfo;
+    private HolidayCalendar holidays;
     private int fullRefreshPhase;
     private String network = "网络 --", status = "长按画面打开设置", locationLabel;
     private int battery = -1;
     private ActionListener actions;
-    public interface ActionListener { void onCityClick(); void onSettingsClick(); void onWeatherClick(); void onThemeClick(); }
+    public interface ActionListener {
+        void onCityClick(); void onSettingsClick(); void onWeatherClick(); void onThemeClick();
+        void onForecastDayClick(int index); void onCalendarDateClick(String date); void onQuoteClick();
+        void onCalendarChange();
+    }
     public DashboardCanvasView(Context context) { super(context); init(); }
     public DashboardCanvasView(Context context, AttributeSet attrs) { super(context, attrs); init(); }
     public DashboardCanvasView(Context context, AttributeSet attrs, int style) { super(context, attrs, style); init(); }
@@ -45,8 +56,9 @@ public final class DashboardCanvasView extends View {
         setClickable(true); setLongClickable(true);
         String saved = getContext().getSharedPreferences("presentation", Context.MODE_PRIVATE).getString("theme", Theme.NEWSPAPER.name());
         for (Theme candidate : Theme.values()) if (candidate.name().equals(saved)) theme = candidate;
+        page = Math.max(0, Math.min(2, getContext().getSharedPreferences("presentation", Context.MODE_PRIVATE).getInt("dashboard_page", 0)));
         loadClockStyle();
-        setContentDescription("天气日历，点击左上角选择地点，点击右上角或长按打开设置，点击风格名称切换主题，点击时钟切换字形，点击天气查看详情");
+        setContentDescription("天气日历，左右轻扫切换天气、预报和月历，点击日期查看详情；点击左上角选择地点，点击右上角或长按打开设置");
     }
     public Theme getTheme() { return theme; }
     public void setTheme(Theme value) {
@@ -61,6 +73,12 @@ public final class DashboardCanvasView extends View {
         segmentedClock = preferences.getBoolean("segmented_clock_" + theme.name(), defaultStyle);
     }
     public void setActionListener(ActionListener listener) { actions = listener; }
+    public void setHolidayCalendar(HolidayCalendar value) { holidays = value; invalidate(); }
+    public int calendarYear() {
+        Calendar month = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"));
+        month.set(Calendar.DAY_OF_MONTH, 1); month.add(Calendar.MONTH, monthOffset);
+        return month.get(Calendar.YEAR);
+    }
     public DashboardJson.DashboardData getData() { return data; }
     public void setData(DashboardJson.DashboardData value) { data = value; setStaleFlags(); invalidate(); }
     public void setDemo(boolean value) { demo = value; invalidate(); }
@@ -96,8 +114,13 @@ public final class DashboardCanvasView extends View {
         canvas.scale(scale, scale);
         long now = System.currentTimeMillis();
         DashboardLayout.Daylight sunlight = DashboardLayout.daylight(data, now);
-        header(canvas); clockAndWeather(canvas, now, sunlight); daylight(canvas, sunlight);
-        metrics(canvas); forecast(canvas); almanac(canvas, now);
+        header(canvas);
+        if (page == 0) {
+            clockAndWeather(canvas, now, sunlight); daylight(canvas, sunlight);
+            metrics(canvas); forecast(canvas); almanac(canvas, now);
+        } else if (page == 1) forecastPage(canvas);
+        else calendarPage(canvas, now);
+        pageFooter(canvas);
         fittedLeft(canvas, demo ? "演示数据 · " + status : status, LEFT, 1438, 16, 900);
         text(canvas, DashboardLayout.WATERMARK_TEXT, RIGHT, 1438, 16, false, Paint.Align.RIGHT);
         canvas.restore();
@@ -161,12 +184,30 @@ public final class DashboardCanvasView extends View {
         fittedLeft(c, a == null ? "--" : a.ganzhi, calendarLeft, 406, 21, 515);
         DashboardJson.Current current = data == null ? null : data.current;
         weatherIcon(c, 743, 218, 88, current == null ? null : current.code, sunlight.available && sunlight.night);
+        weatherLandscape(c, 676, 293, current == null ? null : current.code, sunlight.available && sunlight.night);
         fitted(c, DashboardLayout.weatherLabelText(current), 924, 225, 29, 190);
         prepareText(88, false, Paint.Align.CENTER); paint.setTypeface(LIGHT);
         c.drawText(DashboardLayout.temperatureText(current), 852, 329, paint);
         fitted(c, DashboardLayout.highLowText(current), 852, 371, 22, 340);
         String notice = demo ? "演示模式" : DashboardLayout.weatherNoticeText(data, now);
         if (notice != null) fitted(c, notice, 852, 406, 18, 340);
+    }
+    private void weatherLandscape(Canvas c, float x, float y, Integer code, boolean night) {
+        c.save(); c.translate(x, y);
+        stroke(1.6f);
+        Path hills = new Path(); hills.moveTo(-78, 8); hills.cubicTo(-51, -17, -33, -16, -9, 8);
+        hills.cubicTo(14, -20, 42, -21, 78, 8); c.drawPath(hills, paint);
+        c.drawLine(-83, 10, 83, 10, paint);
+        c.drawLine(-46, 5, -46, -7, paint); c.drawLine(-46, -7, -35, -17, paint); c.drawLine(-35, -17, -24, -7, paint); c.drawLine(-24, -7, -24, 5, paint);
+        c.drawLine(-50, 5, -20, 5, paint);
+        if (code != null && (code >= 51 && code <= 67 || code >= 80 && code <= 82)) {
+            c.drawLine(12, 16, 7, 26, paint); c.drawLine(31, 16, 26, 26, paint); c.drawLine(50, 16, 45, 26, paint);
+        }
+        if (code != null && (code == 71 || code == 73 || code == 75 || code == 77 || code == 85 || code == 86)) {
+            snowflake(c, 15, 20, 4); snowflake(c, 38, 22, 4); snowflake(c, 59, 18, 4);
+        }
+        if (night) { c.drawLine(-64, -3, -64, 3, paint); c.drawLine(-67, 0, -61, 0, paint); c.drawLine(62, -7, 62, -1, paint); }
+        c.restore();
     }
     private void digit(Canvas c, char character, float x, float y, float w, float h) {
         if (character < '0' || character > '9') return;
@@ -259,6 +300,102 @@ public final class DashboardCanvasView extends View {
         } else fitted(c, "温度趋势暂缺", CENTER, 973, 22, 500);
         line(c, LEFT, 1042, RIGHT, 1042);
     }
+    private void forecastPage(Canvas c) {
+        text(c, "七日天气", LEFT, 139, 31, theme == Theme.BOOK, Paint.Align.LEFT);
+        text(c, "最高温 / 最低温", RIGHT, 139, 20, false, Paint.Align.RIGHT);
+        line(c, LEFT, 161, RIGHT, 161);
+        for (int i = 0; i < 7; i++) {
+            DashboardJson.ForecastDay day = DashboardLayout.forecastDayAt(data, i);
+            float top = 177 + i * 160;
+            line(c, LEFT, top, RIGHT, top);
+            fittedLeft(c, DashboardLayout.forecastWeekdayText(day, WEEKDAYS), 72, top + 61, 27, 130);
+            fittedLeft(c, DashboardLayout.forecastDateText(day), 72, top + 94, 20, 130);
+            weatherIcon(c, 276, top + 72, 64, day == null ? null : day.code, false);
+            fittedLeft(c, DashboardLayout.forecastLabelText(day), 370, top + 61, 26, 300);
+            String rain = day == null || day.rainProbability == null ? ""
+                    : "降水 " + DashboardLayout.phpNumber(day.rainProbability) + "%";
+            String wind = day == null || day.windLevel == null ? "" : "风力 " + day.windLevel + "级";
+            if (day != null && day.windMs != null) wind += (wind.isEmpty() ? "风速 " : " · ") + DashboardLayout.phpNumber(day.windMs) + " m/s";
+            String conditions = rain.isEmpty() ? wind : wind.isEmpty() ? rain : rain + "   " + wind;
+            fittedLeft(c, conditions.isEmpty() ? "--" : conditions, 370, top + 99, 19, 390);
+            fitted(c, "最高 " + DashboardLayout.phpNumber(day == null ? null : day.high) + "°",
+                    829, top + 58, 25, 340);
+            fitted(c, "最低 " + DashboardLayout.phpNumber(day == null ? null : day.low) + "°",
+                    829, top + 99, 22, 340);
+        }
+        line(c, LEFT, 1297, RIGHT, 1297);
+    }
+    private void calendarPage(Canvas c, long now) {
+        Calendar month = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"));
+        month.setTimeInMillis(now); month.set(Calendar.DAY_OF_MONTH, 1); month.add(Calendar.MONTH, monthOffset);
+        int year = month.get(Calendar.YEAR), number = month.get(Calendar.MONTH) + 1;
+        int days = month.getActualMaximum(Calendar.DAY_OF_MONTH);
+        int offset = (month.get(Calendar.DAY_OF_WEEK) + 5) % 7;
+        if (calendarMonthInfo == null || cachedCalendarYear != year || cachedCalendarMonth != number) {
+            calendarMonthInfo = new SeasonalCalendar.DayInfo[days];
+            for (int day = 1; day <= days; day++) calendarMonthInfo[day - 1] = SeasonalCalendar.dayInfo(dateKey(year, number, day));
+            cachedCalendarYear = year; cachedCalendarMonth = number;
+        }
+        text(c, year + "年 " + number + "月", CENTER, 145, 34, theme == Theme.BOOK, Paint.Align.CENTER);
+        stroke(2); c.drawLine(LEFT + 26, 126, LEFT + 14, 137, paint); c.drawLine(LEFT + 14, 137, LEFT + 26, 148, paint);
+        c.drawLine(RIGHT - 26, 126, RIGHT - 14, 137, paint); c.drawLine(RIGHT - 14, 137, RIGHT - 26, 148, paint);
+        String[] columns = {"一", "二", "三", "四", "五", "六", "日"};
+        float cellWidth = (RIGHT - LEFT) / 7f, cellHeight = 168, top = 282;
+        for (int col = 0; col < 7; col++) fitted(c, "周" + columns[col], LEFT + cellWidth * (col + .5f), 226, 22, cellWidth - 8);
+        stroke(1); c.drawLine(LEFT, 244, RIGHT, 244, paint);
+        Calendar today = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai")); today.setTimeInMillis(now);
+        for (int index = 0; index < 42; index++) {
+            int day = index - offset + 1;
+            if (day < 1 || day > days) continue;
+            int row = index / 7, col = index % 7;
+            float x = LEFT + cellWidth * col, y = top + cellHeight * row;
+            SeasonalCalendar.DayInfo info = calendarMonthInfo[day - 1];
+            if (year == today.get(Calendar.YEAR) && number == today.get(Calendar.MONTH) + 1
+                    && day == today.get(Calendar.DAY_OF_MONTH)) {
+                stroke(2); c.drawRoundRect(bounds(x + 4, y + 3, x + cellWidth - 4, y + cellHeight - 4), 5, 5, paint);
+            }
+            text(c, String.valueOf(day), x + 15, y + 38, 29, day == today.get(Calendar.DAY_OF_MONTH)
+                    && year == today.get(Calendar.YEAR) && number == today.get(Calendar.MONTH) + 1, Paint.Align.LEFT);
+            HolidayCalendar.Day holiday = holidays == null ? null : holidays.get(info.date);
+            if (holiday != null) {
+                boolean work = holiday.work;
+                float badgeX = x + cellWidth - 29;
+                if (work) stroke(1.4f); else fill();
+                c.drawRoundRect(bounds(badgeX - 14, y + 12, badgeX + 14, y + 40), 3, 3, paint);
+                prepareText(19, false, Paint.Align.CENTER);
+                if (!work) paint.setColor(Color.WHITE);
+                c.drawText(work ? "班" : "休", badgeX, y + 33, paint);
+            }
+            String lunar = day == 1 ? info.lunar.substring(0, info.lunar.indexOf('月') + 1) : info.lunar.substring(info.lunar.indexOf('月') + 1);
+            fittedLeft(c, lunar, x + 15, y + 70, 18, cellWidth - 25);
+            if (!info.jieQi.isEmpty()) fittedLeft(c, info.jieQi, x + 15, y + 105, 17, cellWidth - 25);
+            if (!info.festival.isEmpty()) fittedLeft(c, info.festival, x + 15, y + 137, 16, cellWidth - 25);
+        }
+        for (int row = 0; row <= 6; row++) {
+            stroke(theme == Theme.RETRO ? 1.4f : 0.8f);
+            c.drawLine(LEFT, top + row * cellHeight, RIGHT, top + row * cellHeight, paint);
+        }
+        for (int col = 0; col <= 7; col++) {
+            float x = LEFT + cellWidth * col;
+            stroke(0.8f); c.drawLine(x, top, x, top + cellHeight * 6, paint);
+        }
+        if (holidays != null) fittedLeft(c, holidays.status(year), LEFT, 1334, 17, RIGHT - LEFT);
+    }
+    private String dateKey(int year, int month, int day) {
+        return year + "-" + (month < 10 ? "0" : "") + month + "-" + (day < 10 ? "0" : "") + day;
+    }
+    private void pageFooter(Canvas c) {
+        String[] labels = {"天气", "预报", "月历"};
+        for (int i = 0; i < labels.length; i++) {
+            float x = CENTER + (i - 1) * 132;
+            text(c, labels[i], x, 1404, 18, i == page, Paint.Align.CENTER);
+            if (i == page) { stroke(1.6f); c.drawLine(x - 20, 1413, x + 20, 1413, paint); }
+        }
+    }
+    public String todayDateKey() {
+        Calendar today = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"));
+        return dateKey(today.get(Calendar.YEAR), today.get(Calendar.MONTH) + 1, today.get(Calendar.DAY_OF_MONTH));
+    }
     private void temperatureCurve(Canvas c, boolean high, double bottom, double range, float width) {
         Path path = new Path();
         boolean connected = false;
@@ -288,47 +425,42 @@ public final class DashboardCanvasView extends View {
     private void almanac(Canvas c, long now) {
         DashboardJson.Almanac a = data == null ? null : data.almanac;
         SeasonalCalendar.Snapshot season = seasonalCalendar.at(now);
-        line(c, CENTER, 1064, CENTER, 1140);
+        line(c, CENTER, 1064, CENTER, 1184);
         fittedLeft(c, season.termLine, LEFT, 1080, 23, 460);
-        if (theme != Theme.MINIMAL) seasonalTwig(c, 70, 1120, season.termName);
+        if (theme != Theme.MINIMAL) seasonalTwig(c, 70, 1144, season.termName);
         String poem = DashboardLayout.termPoemText(season.termName, season.rotationDay);
         List<String> poemLines = new ArrayList<>();
         int pause = poem.indexOf('，');
         if (pause > 0) {
             poemLines.add(poem.substring(0, pause + 1)); poemLines.add(poem.substring(pause + 1));
-        } else poemLines = wrapText(poem, 19, 403, 2);
-        for (int i = 0; i < poemLines.size(); i++) fittedLeft(c, poemLines.get(i), theme == Theme.MINIMAL ? LEFT : 102, 1113 + i * 27, 19, 403);
+        } else poemLines = wrapText(poem, 32, 403, 2, true);
+        for (int i = 0; i < poemLines.size(); i++) fittedText(c, poemLines.get(i),
+                theme == Theme.MINIMAL ? LEFT : 102, 1125 + i * 42, 32, 403, Paint.Align.LEFT, true);
         fittedLeft(c, "节日 · " + (a == null ? "--" : a.festival), 570, 1080, 23, 454);
         fittedLeft(c, season.festivalCountdown, 570, 1123, 21, 454);
-        line(c, LEFT, 1158, RIGHT, 1158);
+        line(c, LEFT, 1210, RIGHT, 1210);
         DashboardJson.Quote quote = data == null ? null : data.quote;
-        List<String> quoteLines = wrapText(quote == null ? "--" : quote.content, 28, 900, 2);
-        float baseline = quoteLines.size() > 1 ? 1199 : 1215;
+        List<String> quoteLines = wrapText(quote == null ? "--" : quote.content, 34, theme == Theme.BOOK ? 860 : 930, 2, true);
+        float baseline = quoteLines.size() > 1 ? 1255 : 1276;
         if (theme == Theme.BOOK) {
-            text(c, "“", LEFT + 2, 1207, 46, false, Paint.Align.LEFT);
-            text(c, "”", RIGHT - 2, 1244, 46, false, Paint.Align.RIGHT);
+            text(c, "“", LEFT + 2, 1259, 52, false, Paint.Align.LEFT);
+            text(c, "”", RIGHT - 2, 1328, 52, false, Paint.Align.RIGHT);
         }
-        for (int i = 0; i < quoteLines.size(); i++) fitted(c, quoteLines.get(i), CENTER, baseline + i * 34, 28, theme == Theme.BOOK ? 860 : 930);
+        for (int i = 0; i < quoteLines.size(); i++) fittedText(c, quoteLines.get(i), CENTER,
+                baseline + i * 44, 34, theme == Theme.BOOK ? 860 : 930, Paint.Align.CENTER, true);
         prepareText(18, false, Paint.Align.RIGHT);
         String credit = quote == null ? "一言" : quote.attribution();
         if (paint.measureText(credit) > 930) paint.setTextScaleX(930 / paint.measureText(credit));
-        c.drawText(credit, RIGHT - 16, 1255, paint);
-        line(c, LEFT, 1274, RIGHT, 1274); line(c, CENTER, 1292, CENTER, 1396);
-        text(c, "宜", 70, 1310, 31, false, Paint.Align.CENTER);
-        text(c, "忌", 581, 1310, 31, false, Paint.Align.CENTER);
-        List<String> yi = a == null ? java.util.Collections.emptyList() : a.yi;
-        List<String> ji = a == null ? java.util.Collections.emptyList() : a.ji;
-        DashboardLayout.YijiLayout layout = DashboardLayout.yiji(yi, ji, (value, size) -> {
-            prepareText(size, false, Paint.Align.LEFT); return paint.measureText(value);
-        });
-        for (int i = 0; i < layout.yiLines.size(); i++) fittedLeft(c, layout.yiLines.get(i), 113, 1306 + i * 28, Math.min(25, layout.size), 390);
-        for (int i = 0; i < layout.jiLines.size(); i++) fittedLeft(c, layout.jiLines.get(i), 625, 1306 + i * 28, Math.min(25, layout.size), 399);
-        line(c, LEFT, 1412, RIGHT, 1412);
+        c.drawText(credit, RIGHT - 16, 1344, paint);
+        line(c, LEFT, 1370, RIGHT, 1370);
     }
     private List<String> wrapText(String value, float size, float maxWidth, int maxLines) {
+        return wrapText(value, size, maxWidth, maxLines, false);
+    }
+    private List<String> wrapText(String value, float size, float maxWidth, int maxLines, boolean bold) {
         List<String> lines = new ArrayList<>();
         String rest = value == null ? "--" : value;
-        prepareText(size, false, Paint.Align.LEFT);
+        prepareText(size, bold, Paint.Align.LEFT);
         while (!rest.isEmpty() && lines.size() < maxLines) {
             if (lines.size() == maxLines - 1) { lines.add(rest); break; }
             int count = Math.max(1, paint.breakText(rest, true, maxWidth, null));
@@ -422,7 +554,10 @@ public final class DashboardCanvasView extends View {
         fittedText(c, value, x, y, size, maxWidth, Paint.Align.LEFT);
     }
     private void fittedText(Canvas c, String value, float x, float y, float size, float maxWidth, Paint.Align align) {
-        prepareText(size, false, align);
+        fittedText(c, value, x, y, size, maxWidth, align, false);
+    }
+    private void fittedText(Canvas c, String value, float x, float y, float size, float maxWidth, Paint.Align align, boolean bold) {
+        prepareText(size, bold, align);
         String content = value == null ? "--" : value;
         float width = paint.measureText(content);
         if (width > maxWidth) paint.setTextScaleX(maxWidth / width);
@@ -432,7 +567,7 @@ public final class DashboardCanvasView extends View {
         boolean horizontal = y1 == y2;
         if (theme == Theme.MINIMAL && horizontal) {
             if (y1 == 447) { stroke(1); c.drawLine(x1, y1, x2, y2, paint); }
-            else if (y1 == 680 || y1 == 1042 || y1 == 1274) {
+            else if (y1 == 680 || y1 == 1042 || y1 == 1210) {
                 stroke(1); c.drawLine(CENTER - 22, y1, CENTER + 22, y2, paint);
             }
             return;
@@ -445,26 +580,80 @@ public final class DashboardCanvasView extends View {
     @Override public boolean performClick() { super.performClick(); return true; }
     @Override public boolean performLongClick() { longPressConsumed = true; return super.performLongClick(); }
     @Override public boolean onTouchEvent(MotionEvent event) {
-        if (event.getAction() == MotionEvent.ACTION_DOWN) longPressConsumed = false;
+        if (event.getAction() == MotionEvent.ACTION_DOWN) {
+            longPressConsumed = false; touchDownX = event.getX(); touchDownY = event.getY();
+        }
         boolean handled = super.onTouchEvent(event);
         float scale = Math.min(getWidth() / (float) LOGICAL_WIDTH, getHeight() / (float) LOGICAL_HEIGHT);
         if (!longPressConsumed && scale > 0 && actions != null && event.getAction() == MotionEvent.ACTION_UP) {
             float x = (event.getX() - (getWidth() - LOGICAL_WIDTH * scale) / 2) / scale;
             float y = (event.getY() - (getHeight() - LOGICAL_HEIGHT * scale) / 2) / scale;
+            float dx = (event.getX() - touchDownX) / scale, dy = (event.getY() - touchDownY) / scale;
+            if (Math.abs(dx) >= 90 && Math.abs(dx) > Math.abs(dy) * 1.3f) {
+                int next = Math.max(0, Math.min(2, page + (dx < 0 ? 1 : -1)));
+                if (next != page) {
+                    setPage(next);
+                }
+                return true;
+            }
             if (x < 0 || x > LOGICAL_WIDTH || y < 0 || y > LOGICAL_HEIGHT) return handled;
             if (y <= 76) {
                 performClick();
                 if (x > 800) actions.onSettingsClick(); else if (x < 720) actions.onCityClick();
                 return true;
             }
-            if (y < 145 && x > 700) { performClick(); actions.onThemeClick(); return true; }
-            if (y >= 145 && y <= 330 && x < 620) {
+            if (y >= 1380 && y <= 1425) {
+                setPage(x < 425 ? 0 : x < 650 ? 1 : 2); return true;
+            }
+            if (page == 2 && y >= 115 && y <= 160 && (x < 150 || x > 920)) {
+                monthOffset += x < CENTER ? -1 : 1;
+                actions.onCalendarChange(); performClick(); requestFullRefresh(); return true;
+            }
+            if (page == 2 && y >= 282 && y < 1290) {
+                String date = calendarDateAt(x, y);
+                if (date != null) { performClick(); actions.onCalendarDateClick(date); return true; }
+            }
+            if (page == 1 && y >= 177 && y < 1297) {
+                int index = (int) ((y - 177) / 160);
+                if (index >= 0 && index < DashboardJson.FORECAST_DAYS) {
+                    performClick(); actions.onForecastDayClick(index); return true;
+                }
+            }
+            if (page == 0 && y < 145 && x > 700) { performClick(); actions.onThemeClick(); return true; }
+            if (page == 0 && y >= 735 && y <= 1042) {
+                int index = (int) ((x - LEFT) / ((RIGHT - LEFT) / 7));
+                if (index >= 0 && index < DashboardJson.FORECAST_DAYS) {
+                    performClick(); actions.onForecastDayClick(index); return true;
+                }
+            }
+            if (page == 0 && y >= 1210 && y < 1370) { performClick(); actions.onQuoteClick(); return true; }
+            if (page == 0 && y >= 145 && y <= 330 && x < 620) {
                 performClick(); segmentedClock = !segmentedClock;
                 getContext().getSharedPreferences("presentation", Context.MODE_PRIVATE).edit().putBoolean("segmented_clock_" + theme.name(), segmentedClock).apply();
                 requestFullRefresh(); return true;
             }
-            if (y >= 145 && y <= 490 && x >= 620) { performClick(); actions.onWeatherClick(); return true; }
+            if (page == 0 && y >= 145 && y <= 490 && x >= 620) { performClick(); actions.onWeatherClick(); return true; }
         }
         return handled;
+    }
+    private void setPage(int value) {
+        int next = Math.max(0, Math.min(2, value));
+        if (page == next) return;
+        page = next;
+        getContext().getSharedPreferences("presentation", Context.MODE_PRIVATE).edit().putInt("dashboard_page", page).apply();
+        if (page == 2 && actions != null) actions.onCalendarChange();
+        performClick(); requestFullRefresh();
+    }
+    private String calendarDateAt(float x, float y) {
+        if (x < LEFT || x >= RIGHT) return null;
+        Calendar month = Calendar.getInstance(TimeZone.getTimeZone("Asia/Shanghai"));
+        month.setTimeInMillis(System.currentTimeMillis()); month.set(Calendar.DAY_OF_MONTH, 1); month.add(Calendar.MONTH, monthOffset);
+        int offset = (month.get(Calendar.DAY_OF_WEEK) + 5) % 7;
+        int col = (int) ((x - LEFT) / ((RIGHT - LEFT) / 7f));
+        int row = (int) ((y - 282) / 168);
+        int day = row * 7 + col - offset + 1;
+        int max = month.getActualMaximum(Calendar.DAY_OF_MONTH);
+        if (day < 1 || day > max) return null;
+        return dateKey(month.get(Calendar.YEAR), month.get(Calendar.MONTH) + 1, day);
     }
 }

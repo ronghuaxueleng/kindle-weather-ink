@@ -114,6 +114,7 @@ public final class QWeatherJson {
             item.put("date", day);
             item.put("high", number(row.opt("tempMax")));
             item.put("low", number(row.opt("tempMin")));
+            item.put("rain_probability", number(row.opt("pop")));
             item.put("code", wmoCode(row.optString("iconDay")));
             String dayLabel = row.optString("textDay", "--"), nightLabel = row.optString("textNight", dayLabel);
             item.put("label", dayLabel.equals(nightLabel) ? dayLabel : dayLabel + "转" + nightLabel);

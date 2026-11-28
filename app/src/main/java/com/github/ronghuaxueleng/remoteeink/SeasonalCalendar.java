@@ -15,6 +15,34 @@ public final class SeasonalCalendar {
     private long checkedAt = Long.MIN_VALUE, validUntil = Long.MIN_VALUE;
     private Snapshot cached;
 
+    public static final class DayInfo {
+        public final String date, lunar, jieQi, festival;
+        public final List<String> yi, ji;
+        private DayInfo(Solar solar) {
+            Lunar lunarDate = solar.getLunar();
+            date = solar.toYmd();
+            lunar = lunarDate.getMonthInChinese() + "月" + lunarDate.getDayInChinese();
+            jieQi = lunarDate.getJieQi();
+            List<String> names = new ArrayList<>(solar.getFestivals());
+            names.addAll(lunarDate.getFestivals());
+            if ("清明".equals(jieQi)) names.add("清明节");
+            StringBuilder joined = new StringBuilder();
+            for (String name : names) {
+                if (joined.length() > 0) joined.append("、");
+                joined.append(name);
+            }
+            festival = joined.toString();
+            yi = lunarDate.getDayYi();
+            ji = lunarDate.getDayJi();
+        }
+    }
+
+    public static DayInfo dayInfo(String date) {
+        if (!DashboardJson.isIsoDay(date)) throw new IllegalArgumentException("无效日期：" + date);
+        return new DayInfo(Solar.fromYmd(Integer.parseInt(date.substring(0, 4)),
+                Integer.parseInt(date.substring(5, 7)), Integer.parseInt(date.substring(8, 10))));
+    }
+
     public static final class Snapshot {
         public final String termName, termLine, festivalCountdown;
         public final int rotationDay;

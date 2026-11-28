@@ -28,6 +28,8 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
+import org.json.JSONArray;
+import org.json.JSONException;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
@@ -43,6 +45,7 @@ public final class MainActivity extends Activity {
     private final List<DashboardFetcher> testRequests = new ArrayList<>();
     private SharedPreferences prefs;
     private DashboardCache cache;
+    private HolidayCalendar holidays;
     private DashboardCanvasView view;
     private DashboardFetcher request;
     private boolean active, receiverRegistered;
@@ -51,7 +54,7 @@ public final class MainActivity extends Activity {
     private final Runnable minuteTick = new Runnable() {
         @Override public void run() {
             if (!active) return;
-            view.setStaleFlags(); view.invalidate();
+            updateHolidays(); view.setStaleFlags(); view.invalidate();
             if (DashboardLayout.FullRefreshPolicy.shouldFullRefreshOnMinuteTick(++minuteCount)) view.requestFullRefresh();
             scheduleMinuteTick();
         }
@@ -66,16 +69,23 @@ public final class MainActivity extends Activity {
         fullscreen();
         prefs = getSharedPreferences("dashboard", MODE_PRIVATE);
         cache = new DashboardCache(this);
+        holidays = new HolidayCalendar(this);
         view = new DashboardCanvasView(this);
+        view.setHolidayCalendar(holidays);
         setContentView(view);
         view.setActionListener(new DashboardCanvasView.ActionListener() {
             @Override public void onCityClick() { showCities(); }
             @Override public void onSettingsClick() { showSettings(); }
             @Override public void onWeatherClick() { showWeatherDetails(); }
             @Override public void onThemeClick() { showThemes(); }
+            @Override public void onForecastDayClick(int index) { showForecastDay(index); }
+            @Override public void onCalendarDateClick(String date) { showCalendarDay(date); }
+            @Override public void onQuoteClick() { showQuoteActions(); }
+            @Override public void onCalendarChange() { updateHolidays(); }
         });
         view.setOnLongClickListener(v -> { showSettings(); return true; });
         loadDashboard();
+        updateHolidays();
         view.requestFullRefresh();
     }
     @Override protected void onResume() {
@@ -95,6 +105,7 @@ public final class MainActivity extends Activity {
     @Override protected void onPause() {
         active = false;
         stopRefresh();
+        holidays.cancel();
         handler.removeCallbacks(minuteTick);
         for (DashboardFetcher test : testRequests) test.cancelRequest();
         testRequests.clear();
@@ -152,6 +163,7 @@ public final class MainActivity extends Activity {
     }
     private void refresh() {
         stopRefresh();
+        updateHolidays();
         if (!active || demoMode()) return;
         final int token = generation;
         final String selected = city(), identity = cacheId();
@@ -180,6 +192,14 @@ public final class MainActivity extends Activity {
         });
         request.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
+    private void updateHolidays() {
+        int year = view.calendarYear();
+        holidays.load(year);
+        if (!active || demoMode()) { holidays.cancel(); return; }
+        holidays.requestYear(year, () -> {
+            if (active && !isFinishing()) view.requestFullRefresh();
+        });
+    }
     private void showWeatherDetails() {
         DashboardJson.DashboardData data = view.getData();
         if (data == null) return;
@@ -193,6 +213,83 @@ public final class MainActivity extends Activity {
                 + "\n观测时间：" + (current.observationTime == null ? "--" : current.observationTime)
                 + "\n来源：" + data.weatherSource;
         new AlertDialog.Builder(this).setTitle("今日天气").setMessage(message).setPositiveButton("关闭", null).show();
+    }
+    private void showForecastDay(int index) {
+        DashboardJson.ForecastDay day = DashboardLayout.forecastDayAt(view.getData(), index);
+        if (day == null) return;
+        StringBuilder message = new StringBuilder("日期：").append(day.date).append("\n天气：").append(day.label)
+                .append("\n最高：").append(DashboardLayout.kindleNumber(day.high, "°"))
+                .append("\n最低：").append(DashboardLayout.kindleNumber(day.low, "°"));
+        if (day.rainProbability != null) message.append("\n降水概率：").append(DashboardLayout.phpNumber(day.rainProbability)).append('%');
+        String wind = day.windLevel == null ? "" : day.windLevel + "级";
+        if (day.windMs != null) wind += (wind.isEmpty() ? "风速 " : " · ") + DashboardLayout.phpNumber(day.windMs) + " m/s";
+        if (!wind.isEmpty()) message.append("\n风况：").append(wind);
+        new AlertDialog.Builder(this).setTitle("每日预报").setMessage(message.toString()).setPositiveButton("关闭", null).show();
+    }
+    private void showCalendarDay(String date) {
+        SeasonalCalendar.DayInfo day = SeasonalCalendar.dayInfo(date);
+        HolidayCalendar.Day holiday = holidays.get(date);
+        String festival = day.festival.isEmpty() ? "无" : day.festival;
+        String term = day.jieQi.isEmpty() ? "无" : day.jieQi;
+        String yi = joinItems(day.yi), ji = joinItems(day.ji);
+        DashboardJson.DashboardData data = view.getData();
+        if (date.equals(view.todayDateKey()) && data != null && data.almanac != null) {
+            yi = joinItems(data.almanac.yi); ji = joinItems(data.almanac.ji);
+        }
+        String message = "公历：" + date + "\n农历：" + day.lunar + "\n节气：" + term
+                + "\n节日：" + festival
+                + (holiday == null ? "" : "\n安排：" + holiday.name + (holiday.work ? " · 调休上班" : " · 放假")
+                        + "\n安排来源：提莫节假日 API（按国务院安排整理）")
+                + (holidays.hasYear(Integer.parseInt(date.substring(0, 4))) ? "" : "\n安排：尚未获取该年份放假安排")
+                + "\n宜：" + yi + "\n忌：" + ji;
+        new AlertDialog.Builder(this).setTitle("当日黄历").setMessage(message).setPositiveButton("关闭", null).show();
+    }
+    private String joinItems(List<String> items) {
+        if (items == null || items.isEmpty()) return "--";
+        StringBuilder text = new StringBuilder();
+        for (String item : items) { if (text.length() > 0) text.append("、"); text.append(item); }
+        return text.toString();
+    }
+    private JSONArray savedQuotes() {
+        try { return new JSONArray(getSharedPreferences("presentation", MODE_PRIVATE).getString("saved_quotes", "[]")); }
+        catch (JSONException ignored) { return new JSONArray(); }
+    }
+    private void showQuoteActions() {
+        DashboardJson.DashboardData data = view.getData();
+        if (data == null || data.quote == null) return;
+        String quote = data.quote.content + "\n" + data.quote.attribution();
+        JSONArray saved = savedQuotes();
+        boolean exists = false;
+        for (int i = 0; i < saved.length(); i++) if (quote.equals(saved.optString(i))) exists = true;
+        final boolean alreadySaved = exists;
+        new AlertDialog.Builder(this).setTitle("每日句子").setMessage(quote)
+                .setPositiveButton(alreadySaved ? "取消收藏" : "收藏", (dialog, which) -> toggleQuote(quote, alreadySaved))
+                .setNegativeButton("收藏夹", (dialog, which) -> showSavedQuotes())
+                .setNeutralButton("关闭", null).show();
+    }
+    private void toggleQuote(String quote, boolean remove) {
+        JSONArray source = savedQuotes(), updated = new JSONArray();
+        boolean found = false;
+        for (int i = 0; i < source.length(); i++) {
+            String item = source.optString(i);
+            if (quote.equals(item)) { found = true; if (!remove) updated.put(item); }
+            else updated.put(item);
+        }
+        if (!remove && !found) updated.put(quote);
+        getSharedPreferences("presentation", MODE_PRIVATE).edit().putString("saved_quotes", updated.toString()).apply();
+        Toast.makeText(this, remove ? "已取消收藏" : "已收藏", Toast.LENGTH_SHORT).show();
+    }
+    private void showSavedQuotes() {
+        JSONArray saved = savedQuotes();
+        if (saved.length() == 0) {
+            new AlertDialog.Builder(this).setTitle("收藏夹").setMessage("还没有收藏的句子").setPositiveButton("关闭", null).show();
+            return;
+        }
+        String[] items = new String[saved.length()];
+        for (int i = 0; i < items.length; i++) items[i] = saved.optString(i).replace('\n', ' ');
+        new AlertDialog.Builder(this).setTitle("收藏夹").setItems(items, (dialog, index) ->
+                new AlertDialog.Builder(this).setTitle("收藏的句子").setMessage(saved.optString(index))
+                        .setPositiveButton("关闭", null).show()).setNegativeButton("关闭", null).show();
     }
     private void showThemes() {
         DashboardCanvasView.Theme[] themes = DashboardCanvasView.Theme.values();
