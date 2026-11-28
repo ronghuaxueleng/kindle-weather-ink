@@ -41,6 +41,43 @@ public final class DashboardLayout {
         }
     }
     public static String clockText(long now) { return format(now, "HH:mm"); }
+    public static String compactCity(String city) {
+        if (city == null || city.trim().isEmpty()) return "选择地点";
+        if (city.contains("朗清园")) return "通州 · 朗清园";
+        return city.replaceFirst("[（(].*$", "").replaceFirst("市$", "").trim();
+    }
+    public static final class Daylight {
+        public final String sunrise, sunset, description;
+        public final boolean available, night;
+        public final float progress;
+        private Daylight(String sunrise, String sunset, String description, boolean available, boolean night, float progress) {
+            this.sunrise = sunrise; this.sunset = sunset; this.description = description;
+            this.available = available; this.night = night; this.progress = progress;
+        }
+    }
+    public static Daylight daylight(DashboardJson.DashboardData data, long now) {
+        DashboardJson.Current current = data == null ? null : data.current;
+        String today = format(now, "yyyy-MM-dd");
+        String rise = current == null ? null : current.sunrise, set = current == null ? null : current.sunset;
+        Long start = clockMillis(today, rise), end = clockMillis(today, set);
+        if (data == null || !today.equals(data.date) || start == null || end == null || end <= start) {
+            return new Daylight("--:--", "--:--", "日出日落数据暂缺", false, false, 0);
+        }
+        boolean night = now < start || now >= end;
+        String description = now < start ? "距日出 " + duration(start - now)
+                : now < end ? "距日落 " + duration(end - now)
+                : "今日白昼 " + duration(end - start) + " · 已日落";
+        return new Daylight(rise, set, description, true, night,
+                Math.max(0, Math.min(1, (now - start) / (float) (end - start))));
+    }
+    private static Long clockMillis(String day, String clock) {
+        return clock != null && clock.matches("(?:[01][0-9]|2[0-3]):[0-5][0-9]")
+                ? isoMillis(day + "T" + clock + "+08:00") : null;
+    }
+    private static String duration(long millis) {
+        long minutes = (millis + 59999) / 60000;
+        return (minutes >= 60 ? minutes / 60 + "小时" : "") + minutes % 60 + "分";
+    }
     private static String format(long time, String pattern) {
         SimpleDateFormat format = new SimpleDateFormat(pattern, Locale.CHINA);
         format.setTimeZone(SHANGHAI);

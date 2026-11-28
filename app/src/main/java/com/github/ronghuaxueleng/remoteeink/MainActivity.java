@@ -71,6 +71,8 @@ public final class MainActivity extends Activity {
         view.setActionListener(new DashboardCanvasView.ActionListener() {
             @Override public void onCityClick() { showCities(); }
             @Override public void onSettingsClick() { showSettings(); }
+            @Override public void onWeatherClick() { showWeatherDetails(); }
+            @Override public void onThemeClick() { showThemes(); }
         });
         view.setOnLongClickListener(v -> { showSettings(); return true; });
         loadDashboard();
@@ -178,6 +180,32 @@ public final class MainActivity extends Activity {
         });
         request.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
     }
+    private void showWeatherDetails() {
+        DashboardJson.DashboardData data = view.getData();
+        if (data == null) return;
+        DashboardJson.Current current = data.current;
+        String message = "天气：" + current.label + "\n气温：" + DashboardLayout.temperatureText(current)
+                + "\n体感：" + DashboardLayout.feelsLikeText(current) + "\n" + DashboardLayout.highLowText(current)
+                + "\n湿度：" + DashboardLayout.humidityText(current)
+                + "\n风：" + DashboardLayout.windLineText(current) + " · " + DashboardLayout.windSpeedLineText(current)
+                + "\n日出：" + (current.sunrise == null ? "--" : current.sunrise)
+                + "\n日落：" + (current.sunset == null ? "--" : current.sunset)
+                + "\n观测时间：" + (current.observationTime == null ? "--" : current.observationTime)
+                + "\n来源：" + data.weatherSource;
+        new AlertDialog.Builder(this).setTitle("今日天气").setMessage(message).setPositiveButton("关闭", null).show();
+    }
+    private void showThemes() {
+        DashboardCanvasView.Theme[] themes = DashboardCanvasView.Theme.values();
+        String[] labels = new String[themes.length];
+        int selected = 0;
+        for (int i = 0; i < themes.length; i++) {
+            labels[i] = themes[i].label;
+            if (themes[i] == view.getTheme()) selected = i;
+        }
+        new AlertDialog.Builder(this).setTitle("选择界面风格").setSingleChoiceItems(labels, selected, (dialog, index) -> {
+            view.setTheme(themes[index]); dialog.dismiss();
+        }).setNegativeButton("取消", null).show();
+    }
     private void showCities() {
         String[] ids = DashboardFetcher.CITY_TO_SERVER_CITY.keySet().toArray(new String[0]);
         String[] names = DashboardFetcher.CITY_TO_SERVER_CITY.values().toArray(new String[0]);
@@ -207,6 +235,7 @@ public final class MainActivity extends Activity {
         addButton(content, "测试天气与黄历连接", () -> testServer(url.getText().toString().trim(),
                 host.getText().toString(), key.getText().toString()));
         addButton(content, "选择城市", this::showCities);
+        addButton(content, "切换界面风格", this::showThemes);
         addButton(content, "立即刷新已保存的配置", () -> {
             prefs.edit().putBoolean("demo_mode", false).apply(); refresh();
         });
