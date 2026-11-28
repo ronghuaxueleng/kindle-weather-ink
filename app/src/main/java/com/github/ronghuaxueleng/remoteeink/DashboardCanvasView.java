@@ -130,8 +130,9 @@ public final class DashboardCanvasView extends View {
             } else if (i == 1) {
                 fitted(c, DashboardLayout.humidityText(current), center, 646, 51, 230);
             } else if (i == 2) {
-                fitted(c, "AQI " + DashboardLayout.phpNumber(air == null ? null : air.aqi), center, 605, 36, 230);
-                fitted(c, air == null ? "--" : air.primaryPollutant, center, 646, 24, 230);
+                fitted(c, (air == null ? "AQI" : air.aqiName) + " " + DashboardLayout.phpNumber(air == null ? null : air.aqi), center, 605, 36, 230);
+                fitted(c, air == null ? "--" : air.pm25 == null ? air.primaryPollutant
+                        : "PM2.5 " + DashboardLayout.pmText(air), center, 646, 24, 230);
                 fitted(c, air == null ? "--" : air.aqiLabel, center, 686, 23, 230);
             } else {
                 fitted(c, DashboardLayout.feelsLikeText(current), center, 646, 48, 230);

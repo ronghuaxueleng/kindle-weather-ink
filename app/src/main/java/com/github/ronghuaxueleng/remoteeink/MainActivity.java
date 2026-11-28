@@ -120,7 +120,9 @@ public final class MainActivity extends Activity {
         return saved == null || saved.trim().isEmpty() ? DEFAULT_BASE_URL : saved.trim();
     }
     private boolean demoMode() { return prefs.getBoolean("demo_mode", false); }
-    private String cacheId() { return "china-weather-msn/1|" + baseUrl() + "|" + city(); }
+    private String weatherHost() { return QWeatherJson.normalizeHost(prefs.getString("qweather_host", "")); }
+    private String weatherKey() { return prefs.getString("qweather_api_key", ""); }
+    private String cacheId() { return "qweather/1|" + weatherHost() + "|" + baseUrl() + "|" + city(); }
     private long intervalMillis() {
         return Math.max(60, Math.min(MAX_INTERVAL, prefs.getInt("interval_seconds", DEFAULT_INTERVAL))) * 1000L;
     }
@@ -158,7 +160,7 @@ public final class MainActivity extends Activity {
             if (result != null && result.ok()) {
                 view.setData(result.data != null ? result.data : DashboardJson.parse(result.json));
                 view.setDemo(false);
-                view.setStatus("天气：中国天气网 · 空气：" + view.getData().airSource
+                view.setStatus("天气：" + view.getData().weatherSource + " · 空气：" + view.getData().airSource
                         + " · 已更新" + (result.notice == null ? "" : "；" + result.notice));
                 view.requestFullRefresh();
                 disk.execute(() -> {
@@ -189,13 +191,21 @@ public final class MainActivity extends Activity {
     private void showSettings() {
         LinearLayout content = new LinearLayout(this);
         content.setOrientation(LinearLayout.VERTICAL); content.setPadding(dp(20), dp(12), dp(20), dp(12));
-        TextView urlLabel = new TextView(this); urlLabel.setText("天气直连中国天气网，空气与体感由 MSN 提供；下方地址仅用于黄历（不含 /v1/dashboard）"); content.addView(urlLabel);
+        TextView hostLabel = new TextView(this); hostLabel.setText("和风天气 API Host（控制台中的专属域名）"); content.addView(hostLabel);
+        EditText host = new EditText(this); host.setSingleLine(true); host.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
+        host.setHint("你的专属域名.qweatherapi.com"); host.setText(weatherHost()); content.addView(host);
+        TextView keyLabel = new TextView(this); keyLabel.setText("和风天气 API Key（仅保存在本机，不是凭据 ID）"); content.addView(keyLabel);
+        EditText key = new EditText(this); key.setSingleLine(true);
+        key.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
+        key.setSaveEnabled(false); key.setText(weatherKey()); content.addView(key);
+        TextView urlLabel = new TextView(this); urlLabel.setText("黄历接口地址（不含 /v1/dashboard）"); content.addView(urlLabel);
         EditText url = new EditText(this); url.setSingleLine(true); url.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_URI);
         url.setText(baseUrl()); content.addView(url);
         TextView intervalLabel = new TextView(this); intervalLabel.setText("刷新间隔，单位秒（60–604800，默认 1800）"); content.addView(intervalLabel);
         EditText interval = new EditText(this); interval.setSingleLine(true); interval.setInputType(InputType.TYPE_CLASS_NUMBER);
         interval.setText(String.valueOf(prefs.getInt("interval_seconds", DEFAULT_INTERVAL))); content.addView(interval);
-        addButton(content, "测试天气与黄历连接", () -> testServer(url.getText().toString().trim()));
+        addButton(content, "测试天气与黄历连接", () -> testServer(url.getText().toString().trim(),
+                host.getText().toString(), key.getText().toString()));
         addButton(content, "选择城市", this::showCities);
         addButton(content, "立即刷新已保存的配置", () -> {
             prefs.edit().putBoolean("demo_mode", false).apply(); refresh();
@@ -205,7 +215,7 @@ public final class MainActivity extends Activity {
             view.requestFullRefresh(); Toast.makeText(this, "已切换离线演示，点击立即刷新可恢复联网", Toast.LENGTH_LONG).show();
         });
         TextView version = new TextView(this);
-        version.setText("智能天气墨水屏 " + BuildConfig.VERSION_NAME + "\n长按画面打开设置，点击左上角切换城市。\n天气直连中国天气网；MSN 提供空气质量与体感温度，空气来源显示在底部。空气卡片显示 AQI 和首要污染物，保留原始单位。黄历使用上方接口。未提供的指标显示 --。");
+        version.setText("智能天气墨水屏 " + BuildConfig.VERSION_NAME + "\n长按画面打开设置，点击左上角切换城市。\n实况、体感温度、七日预报和空气质量由和风天气提供。空气卡片显示指数标准、PM2.5 浓度与等级。黄历使用上方接口，句子来自一言。未提供的指标显示 --。\n天气数据：和风天气 QWeather\nhttps://www.qweather.com/");
         version.setPadding(0, dp(12), 0, 0); content.addView(version);
         ScrollView scroll = new ScrollView(this); scroll.addView(content);
         AlertDialog dialog = new AlertDialog.Builder(this).setTitle("墨水看板设置").setView(scroll)
@@ -213,24 +223,33 @@ public final class MainActivity extends Activity {
         dialog.setOnShowListener(ignored -> dialog.getButton(DialogInterface.BUTTON_POSITIVE).setOnClickListener(v -> {
             String address = url.getText().toString().trim();
             if (!DashboardFetcher.validBaseUrl(address)) { url.setError("请输入有效 HTTP/HTTPS 地址，不含 ? 或 #"); return; }
+            String hostValue = QWeatherJson.normalizeHost(host.getText().toString());
+            String keyValue = key.getText().toString().trim();
+            if (!QWeatherJson.validHost(hostValue)) { host.setError("请输入和风控制台中的 qweatherapi.com 专属域名"); return; }
+            if (keyValue.isEmpty()) { key.setError("请输入 API Key"); return; }
             int seconds;
             try { seconds = Integer.parseInt(interval.getText().toString().trim()); }
             catch (NumberFormatException e) { interval.setError("请输入有效整数"); return; }
             if (seconds < 60 || seconds > MAX_INTERVAL) { interval.setError("范围为 60–604800 秒"); return; }
-            prefs.edit().putString("json_base_url", address).putInt("interval_seconds", seconds).putBoolean("demo_mode", false).apply();
+            prefs.edit().putString("json_base_url", address).putInt("interval_seconds", seconds)
+                    .putString("qweather_host", hostValue).putString("qweather_api_key", keyValue)
+                    .putBoolean("demo_mode", false).apply();
             stopRefresh(); loadDashboard(); refresh(); view.requestFullRefresh(); dialog.dismiss();
         }));
         dialog.show();
     }
-    private void testServer(String address) {
+    private void testServer(String address, String host, String key) {
         if (!DashboardFetcher.validBaseUrl(address)) { Toast.makeText(this, "服务器地址无效", Toast.LENGTH_LONG).show(); return; }
+        if (!QWeatherJson.validHost(host) || key.trim().isEmpty()) {
+            Toast.makeText(this, "请填写和风天气 API Host 和 API Key", Toast.LENGTH_LONG).show(); return;
+        }
         if (testRequests.size() >= 2) { Toast.makeText(this, "正在测试，请稍候", Toast.LENGTH_SHORT).show(); return; }
         Toast.makeText(this, "正在测试天气与黄历连接", Toast.LENGTH_SHORT).show();
         final DashboardFetcher[] task = new DashboardFetcher[1];
-        task[0] = new DashboardFetcher(this, address, city(), result -> {
+        task[0] = new DashboardFetcher(this, address, city(), host, key, result -> {
             testRequests.remove(task[0]);
             if (active && !isFinishing()) Toast.makeText(this, result.ok()
-                    ? (result.notice == null ? "天气、MSN 与黄历连接正常" : "天气实况正常；" + result.notice)
+                    ? (result.notice == null ? "和风天气、空气与黄历连接正常" : "天气实况正常；" + result.notice)
                     : result.error, Toast.LENGTH_LONG).show();
         });
         testRequests.add(task[0]); task[0].executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);

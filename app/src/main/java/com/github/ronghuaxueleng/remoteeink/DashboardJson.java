@@ -203,11 +203,12 @@ public final class DashboardJson {
     }
     public static final class Air {
         public final Double pm25, aqi;
-        public final String aqiSystem, pm25Grade, observationTime;
+        public final String aqiSystem, aqiName, pm25Grade, observationTime;
         public final String aqiLabel, primaryPollutant;
         private Air(JSONObject o) {
             pm25 = number(o, "pm2_5"); aqi = number(o, "aqi");
             aqiSystem = text(o, "aqi_system", MISSING_TEXT);
+            aqiName = text(o, "aqi_name", "AQI");
             aqiLabel = text(o, "aqi_label", MISSING_TEXT);
             primaryPollutant = text(o, "primary_pollutant", MISSING_TEXT);
             pm25Grade = text(o, "pm2_5_grade", MISSING_TEXT);

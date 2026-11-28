@@ -57,7 +57,8 @@ public final class DashboardJsonTest {
         assertNotNull(label);
         assertTrue(label.contains("北京市通州区朗清园"));
         assertTrue(label.contains("通州区预报"));
-        assertEquals("101010600", DashboardFetcher.weatherStationId(cityId));
+        assertEquals("https://example.re.qweatherapi.com/v7/weather/now?location=116.68,39.90&lang=zh&unit=m",
+                QWeatherJson.endpoint("example.re.qweatherapi.com", cityId, "now"));
         assertEquals("北京", DashboardFetcher.serverCityName(cityId));
         assertEquals("上海", DashboardFetcher.serverCityName("shanghai"));
         assertEquals("北京", DashboardFetcher.serverCityName("unknown"));
